@@ -24,6 +24,19 @@ relative to the folder this `SKILL.md` is in. Run a script by its full path, fro
 session's own working folder: do not `cd` first. The preflight looks for a
 project-level investigator from the working folder up to the git root.
 
+## Your own commands
+
+You follow the same rule as the investigators: **one plain command per call**. Each
+shell call is one command written out in full: a script by its full path with its
+flags, or one read-only kubectl command (pipes only into the filters the recipe lists).
+No `&&`, `;` or `||`, no redirection, no shell variables or command substitution, no
+`cd` and no `echo`. The session may run without anyone to approve a prompt, and there a
+compound command is refused.
+
+If a command is denied by the permission rules, retry it once as a plain command (split
+or simplified as above). If that is denied too, stop and tell the user exactly which
+command was denied and what the denial said. Never end the run without saying why.
+
 ## 1. Pick the mode
 
 - **herdr mode** when `HERDR_ENV` is `1` and either the user asked for herdr (panes,
@@ -48,7 +61,9 @@ scripts/preflight.sh --subagents --platform copilot
 
 Run the first line in Claude Code, the second in GitHub Copilot CLI. In herdr mode, run
 `scripts/preflight.sh` with no arguments: herdr helpers do not use the agent definition.
-Then:
+Run it as one plain command: the script's full path and its flags, nothing chained
+before or after it, and no `echo` of the exit code. Read the exit code and the output
+from the tool result. Then:
 
 - **Exit 0, `viewer ok`:** carry on.
 - **Exit 3, `NOT view-only`:** stop. Show the user the script's output. The current

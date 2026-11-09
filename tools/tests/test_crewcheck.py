@@ -298,3 +298,14 @@ def test_herdr_prompt_send_uses_single_quotes(tmp_path):
     assert "crew-claude '<prompt>'" in text
     path.write_text(text.replace("'<prompt>'", '"<prompt>"'), encoding="utf-8")
     assert any(m.startswith(HERDR) and "single quotes" in m for m in messages(repo))
+
+
+@network
+@pytest.mark.parametrize("needle", ["one plain command per call", "denied"])
+def test_skill_states_plain_command_rule_for_the_boss(tmp_path, needle):
+    repo = make_repo(tmp_path)
+    path = repo / SKILL / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert needle in text
+    path.write_text(text.replace(needle, "x"), encoding="utf-8")
+    assert any(m.startswith(f"{SKILL}/SKILL.md") and needle in m for m in messages(repo))

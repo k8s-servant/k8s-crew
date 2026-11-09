@@ -54,6 +54,10 @@ CREW_PROGRAMS = {
     "scripts/viewer-kubeconfig.sh",
 }
 REQUIRED_TEXT = {
+    SKILL_DIR / "SKILL.md": (
+        ("one plain command per call", "must state one plain command per call for the boss"),
+        ("denied", "must say what the boss does when a command is denied"),
+    ),
     HERDR_RUNNER: (
         ("agent_prompt_stalled", "must say what to do on agent_prompt_stalled (never resend)"),
         ("export KUBECONFIG=", "must set the viewer identity with export KUBECONFIG= per pane"),

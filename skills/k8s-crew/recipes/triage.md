@@ -25,6 +25,10 @@ Rules for the whole run:
     `auth can-i`, `auth whoami`, `rollout status` and `rollout history`. Use
     `kubectl auth whoami` to see the identity, not the kubeconfig context. When
     `kubectl top` fails, write "metrics not available" and go on.
+- **A denied command is retried once, then reported.** If a permission rule denies a
+  command, run it again once as a plain command. If it is still denied, the boss stops
+  and tells the user which command was denied and why. A run never ends without a
+  reply.
 
 ## 1. Sweep
 
