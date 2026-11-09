@@ -118,7 +118,7 @@ Approvals:
   - `npx skills add k8s-servant/k8s-skills` plus `npx skills add k8s-servant/k8s-crew` (Claude Code and Copilot).
   - Claude plugin: k8s-crew's plugin declares a dependency on the k8s-skills plugin.
 - The boss checks the needed skills are available at the start of a run and says exactly what to install if not.
-- **Small upstream change in k8s-skills (separate PR, optional for v1):** a fixed results table at the end of the triage report (issue, severity tier, object and namespace, next skill). It helps humans too and makes the hand-off reliable. k8s-crew must still work with today's triage report shape.
+- **No changes to k8s-skills (author's decision, 2026-11-09):** the two projects live independently. k8s-crew works with k8s-skills as published, including today's triage report shape, and never needs an upstream change.
 
 ## Repo layout
 
@@ -208,6 +208,8 @@ Node faults need a kind cluster with a worker (`--workers 1`). The test cluster 
 - herdr mode release check is a human-attended run.
 
 ## Decided by the author
+
+- k8s-skills stays independent: k8s-crew never requires or proposes changes to it (the optional triage results table was dropped).
 
 - The crew session has only the view-only identity; the user runs every fix themselves.
 - Ties with the single-agent baseline ship and are reported honestly; the gate is "never worse".
