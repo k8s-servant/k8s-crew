@@ -24,13 +24,13 @@ python3 -m venv .venv && .venv/bin/pip install --require-hashes -r requirements-
 .venv/bin/ruff check . && .venv/bin/ruff format --check .   # lint
 .venv/bin/python -m tools.crewcheck check                # check the crew skills
 tests/cluster.sh up | down                               # throwaway kind cluster
-tests/crew.sh                                            # run a crew scenario
-tests/score.sh                                           # score a crew run
+tests/crew.sh <scenario> --agent claude|copilot --mode subagents|single   # run a scenario
+tests/score.sh runs/<scenario>/<agent>-<mode>-<n>         # score a run (score.json)
+.venv/bin/python -m tools.score summarize runs           # pass table of all runs
 npx --yes markdownlint-cli2@0.24.0 "**/*.md" "#.venv" "#node_modules" "#.cache"   # markdown lint
 ```
 
-`tools/crewcheck`, `tests/cluster.sh`, `tests/crew.sh` and `tests/score.sh` arrive in
-later tasks of the v1 plan.
+How transcripts are captured, and their limits: `docs/transcripts.md`.
 
 ## Rules (must follow)
 
