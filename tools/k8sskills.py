@@ -7,6 +7,7 @@ the duration of the import and restored afterwards, so nothing of the checkout l
 
 import importlib
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -51,8 +52,20 @@ def read_sha() -> str:
     return _read_pin("K8S_SKILLS_SHA")
 
 
+GIT_SAFE_FLAGS = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
+GIT_SAFE_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"}
+
+
 def _git(*args: str, cwd: Path | None = None) -> str:
-    done = subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+    """Run git with config that cannot run code: a checkout's own .git is not trusted."""
+    done = subprocess.run(
+        ["git", *GIT_SAFE_FLAGS, *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, **GIT_SAFE_ENV},
+    )
     return done.stdout.strip()
 
 

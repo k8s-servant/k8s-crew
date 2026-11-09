@@ -1,5 +1,6 @@
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -124,3 +125,31 @@ def test_fetch_rejects_wrong_commit(origin, tmp_path, monkeypatch):
         k8sskills.fetch("vtest")
     assert origin in str(err.value)
     assert not (tmp_path / "cache" / "k8s-skills-vtest").exists()
+
+
+def test_git_helper_always_disables_config_driven_code(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(k8sskills.subprocess, "run", fake_run)
+    k8sskills._git("status", cwd=tmp_path)
+    k8sskills._head(tmp_path)
+    k8sskills._dirty(tmp_path)
+    assert calls
+    for cmd, kwargs in calls:
+        assert cmd[:5] == ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
+        assert kwargs["env"]["GIT_CONFIG_NOSYSTEM"] == "1"
+        assert kwargs["env"]["GIT_CONFIG_GLOBAL"] == "/dev/null"
+
+
+def test_every_git_call_goes_through_the_helper():
+    source = Path(k8sskills.__file__).read_text()
+    assert source.count("subprocess.run(") == 1
+
+
+def test_ci_does_not_restore_the_checkout_from_a_cache():
+    ci = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
+    assert "actions/cache" not in ci.read_text()
