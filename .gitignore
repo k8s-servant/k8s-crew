@@ -1,1 +1,8 @@
 .superpowers/
+.cache/
+.kube/
+.venv/
+runs/
+__pycache__/
+.pytest_cache/
+.ruff_cache/

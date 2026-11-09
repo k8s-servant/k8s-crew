@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# k8s-crew kubectl guard: a kubectl first on a crew session's PATH that runs the real
+# kubectl only with the crew viewer kubeconfig. It is what keeps the session on the
+# view-only identity when other kubeconfigs exist on the machine: the command rules of
+# Claude Code and Copilot CLI cannot match every form of a command (Copilot cannot deny
+# a flag after the first word at all), so the guard checks every call at run time.
+#
+#   kubectl-guard install <bin-dir> <viewer-kubeconfig>
+#       Copy this guard to <bin-dir>/kubectl and record, beside it, the viewer
+#       kubeconfig (an absolute path to one file that holds only the crew-viewer token,
+#       as scripts/viewer-kubeconfig.sh writes it) and the real kubectl (the first
+#       kubectl on PATH that is not a guard). scripts/crew-start.sh does this for you.
+#
+#   <bin-dir>/kubectl [kubectl arguments]
+#       Refuse (exit 126) when KUBECONFIG is not exactly the recorded viewer kubeconfig
+#       (unset, another file, or a colon-separated list), or when any argument picks
+#       another kubeconfig, context, cluster, server or identity, or a kuberc file.
+#       Otherwise exec the real kubectl, with KUBERC=off so no kuberc alias or default
+#       changes what runs.
+#
+# A net, not a lock: a program that calls the real kubectl by its full path does not
+# pass through here. See docs/safety.md.
+set -euo pipefail
+
+# Flags that pick another kubeconfig, cluster, server or identity. -s is --server.
+TARGET_FLAGS=(
+  --kubeconfig --context --cluster --server --token --user --username --password
+  --as --as-group --as-uid --client-certificate --client-key --certificate-authority
+  --kuberc
+)
+# kubectl short flags that take a value: in a cluster like -nkube-system the rest of
+# the word is that value. Any other letter is read as a switch.
+VALUE_LETTERS="nolcLvfk"
+MARK="# k8s-crew kubectl guard"
+CONF_NAME="kubectl-guard.conf"
+
+refuse() {
+  echo "k8s-crew kubectl guard: $1. This session may only use the crew viewer" \
+    "kubeconfig${viewer:+ ($viewer)}. Do not try another kubeconfig, context or" \
+    "identity: stop and tell the user." >&2
+  exit 126
+}
+
+usage() {
+  echo "usage: kubectl-guard install <bin-dir> <viewer-kubeconfig>" >&2
+  exit 2
+}
+
+# The first kubectl on PATH that is not a guard and not in $1.
+find_real() {
+  local skip="$1" dir candidate
+  local IFS=:
+  for dir in $PATH; do
+    [[ -n "$dir" && "$dir" != "$skip" ]] || continue
+    candidate="$dir/kubectl"
+    [[ -f "$candidate" && -x "$candidate" ]] || continue
+    grep -qF "$MARK" "$candidate" 2>/dev/null && continue
+    echo "$candidate"
+    return 0
+  done
+  return 1
+}
+
+# True when $1 looks like what scripts/viewer-kubeconfig.sh writes: one user, named
+# crew-viewer, holding a token, and no other way to authenticate. Stops a launcher or
+# agent from pointing the guard at an admin kubeconfig (--viewer ~/.kube/config).
+is_viewer() {
+  local file="$1"
+  grep -qx -- '- name: crew-viewer' "$file" &&
+    grep -qE '^    token: [^[:space:]]+$' "$file" &&
+    [[ "$(grep -cx '  user:' "$file")" == 1 ]] &&
+    ! grep -qE 'client-key|client-certificate|exec:|auth-provider|tokenFile|username:|password:' \
+      "$file"
+}
+
+install_guard() {
+  local bin="${1:-}" viewer="${2:-}" real
+  [[ $# -eq 2 && -d "$bin" ]] || usage
+  if [[ "$viewer" != /* || "$viewer" == *:* || "$viewer" == *$'\n'* ]]; then
+    echo "kubectl-guard: the viewer kubeconfig must be one absolute path: $viewer" >&2
+    exit 2
+  fi
+  [[ -f "$viewer" && -r "$viewer" ]] || {
+    echo "kubectl-guard: no viewer kubeconfig at $viewer" >&2
+    exit 2
+  }
+  is_viewer "$viewer" || {
+    echo "kubectl-guard: $viewer is not a crew viewer kubeconfig (one user crew-viewer" \
+      "with a token, as scripts/viewer-kubeconfig.sh writes it)" >&2
+    exit 2
+  }
+  bin="$(cd "$bin" && pwd -P)"
+  real="$(find_real "$bin")" || {
+    echo "kubectl-guard: no kubectl found on PATH" >&2
+    exit 2
+  }
+  cp "${BASH_SOURCE[0]}" "$bin/kubectl"
+  printf 'viewer=%s\nreal=%s\n' "$viewer" "$real" > "$bin/$CONF_NAME"
+  chmod 555 "$bin/kubectl"
+  chmod 444 "$bin/$CONF_NAME"
+}
+
+# Not installed (run as kubectl-guard): the only thing it does is install.
+if [[ "$(basename "$0")" != kubectl ]]; then
+  [[ "${1:-}" == install ]] || usage
+  shift
+  install_guard "$@"
+  exit 0
+fi
+
+viewer="" real=""
+conf="$(cd "$(dirname "$0")" && pwd -P)/$CONF_NAME"
+[[ -r "$conf" ]] || refuse "no $CONF_NAME next to the guard"
+while IFS= read -r line; do
+  case "$line" in
+    viewer=*) viewer="${line#viewer=}" ;;
+    real=*) real="${line#real=}" ;;
+  esac
+done < "$conf"
+[[ -n "$viewer" && -x "$real" ]] || refuse "$CONF_NAME is incomplete"
+
+[[ "${KUBECONFIG:-}" == "$viewer" ]] ||
+  refuse "KUBECONFIG is not the viewer kubeconfig (it is '${KUBECONFIG:-unset}')"
+
+for arg in "$@"; do
+  for flag in "${TARGET_FLAGS[@]}"; do
+    [[ "$arg" == "$flag" || "$arg" == "$flag="* ]] && refuse "$flag is not allowed"
+  done
+  # Short flags, also bundled (-As URL) or with the value attached (-sURL, -s=URL).
+  if [[ "$arg" == -[!-]* ]]; then
+    letters="${arg:1}"
+    while [[ -n "$letters" ]]; do
+      letter="${letters:0:1}"
+      [[ "$letter" == s ]] && refuse "-s (--server) is not allowed"
+      [[ "$VALUE_LETTERS" == *"$letter"* ]] && break
+      letters="${letters:1}"
+    done
+  fi
+done
+
+export KUBERC=off
+exec "$real" "$@"

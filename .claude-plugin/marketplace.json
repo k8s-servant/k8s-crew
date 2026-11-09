@@ -1,0 +1,17 @@
+{
+  "name": "k8s-crew",
+  "owner": {
+    "name": "k8s-servant"
+  },
+  "metadata": {
+    "description": "A Kubernetes triage crew of read-only agents, built on k8s-skills"
+  },
+  "allowCrossMarketplaceDependenciesOn": ["k8s-skills"],
+  "plugins": [
+    {
+      "name": "k8s-crew",
+      "source": "./",
+      "description": "Sweeps the cluster with k8s-triage, gives each top issue to a read-only investigator agent and writes one report with fixes for you to run"
+    }
+  ]
+}
