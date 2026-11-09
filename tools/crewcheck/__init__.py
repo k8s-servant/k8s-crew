@@ -44,14 +44,15 @@ GENERATED_NOTE = (
     " Do not edit by hand. -->\n\n"
 )
 # Programs of the crew's own tooling, allowed as the first word of a line in a code block.
+# A script may also be written by its full path, as <skill-dir>/scripts/<name>.
 CREW_PROGRAMS = {
     "herdr",
     "printenv",
-    "test",
-    "wait",
     "scripts/preflight.sh",
+    "scripts/crew-start.sh",
     "scripts/install-agents.sh",
     "scripts/viewer-kubeconfig.sh",
+    "config/copilot-deny-tools.sh",
 }
 REQUIRED_TEXT = {
     SKILL_DIR / "SKILL.md": (
@@ -60,7 +61,10 @@ REQUIRED_TEXT = {
     ),
     HERDR_RUNNER: (
         ("agent_prompt_stalled", "must say what to do on agent_prompt_stalled (never resend)"),
-        ("export KUBECONFIG=", "must set the viewer identity with export KUBECONFIG= per pane"),
+        (
+            "crew-start.sh --viewer",
+            "must give every helper pane the guard with scripts/crew-start.sh --viewer",
+        ),
     ),
 }
 # herdr helpers have no agent definition, so their prompt must carry the hard rules itself.
@@ -82,6 +86,12 @@ HERDR_PROMPT_RULES = (
 # The prompt is sent as one single-quoted shell argument, so nothing in it may be shell-active.
 HERDR_PROMPT_FORBIDDEN = ("$", "`", '"', "'")
 HERDR_SEND = re.compile(r"^herdr agent prompt (\S+) (.*)$")
+# The crew never runs a fix, so its files and reports cannot use the k8s-skills ask-first
+# marker, which says "the agent runs this only after the user approves it". They use this
+# marker instead. It is mapped to the pinned checker's marker before parsing, so the
+# pinned ask-first rules (an allow-listed change, an # Undo: line) still apply to the
+# block under it.
+CREW_ASK_MARKER = "> Ask first: changes the cluster. Run it yourself after review."
 
 
 @dataclass(frozen=True)
@@ -126,7 +136,7 @@ def _crew_line_problems(command: str, checker: Checker) -> list[str] | None:
         first = shlex.split(command)[0]
     except (ValueError, IndexError):
         return None
-    if first not in CREW_PROGRAMS:
+    if first.removeprefix("<skill-dir>/") not in CREW_PROGRAMS:
         return None
     module = checker.commands_module
     keys = set(checker.allowlist["commands"])
@@ -153,7 +163,7 @@ def _chain_problems(command: str, checker: Checker) -> list[str]:
             segments[-1][1].append(token)
     problems: list[str] = []
     for operator, words in segments[1:]:
-        if not words or words[0] in CREW_PROGRAMS:
+        if not words or words[0].removeprefix("<skill-dir>/") in CREW_PROGRAMS:
             continue
         if operator == "|" and words[0] in checker.allowlist["filters"]:
             continue
@@ -161,11 +171,22 @@ def _chain_problems(command: str, checker: Checker) -> list[str]:
     return problems
 
 
+def crew_markdown(text: str, module) -> str:
+    """The text with each crew ask-first marker line replaced by the pinned marker."""
+    lines = text.split("\n")
+    return "\n".join(module.ASK_MARKER if ln.rstrip() == CREW_ASK_MARKER else ln for ln in lines)
+
+
 def check_markdown(rel: Path, text: str, first_line: int, checker: Checker) -> list[Finding]:
     """Check every command in a Markdown text the way k8s-skills checks a skill."""
     module = checker.commands_module
     allowlist = checker.allowlist
-    found: list[Finding] = []
+    found: list[Finding] = [
+        Finding(rel, first_line + offset, f"use the crew ask-first marker: {CREW_ASK_MARKER}")
+        for offset, line in enumerate(text.split("\n"))
+        if line.strip() == module.ASK_MARKER
+    ]
+    text = crew_markdown(text, module)
     blocks, prose = module._parse_markdown(
         text,
         first_line,

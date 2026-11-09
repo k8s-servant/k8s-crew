@@ -6,6 +6,7 @@ expects the matching finding, so a finding can only come from the change under t
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -13,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from tools.crewcheck import collect, run_check, write_agent
+from tools.k8sskills import load_checker
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILL = "skills/k8s-crew"
@@ -82,17 +84,65 @@ def test_commands_in_markdown_are_run_freely(tmp_path):
     assert any(m.startswith(f"{RECIPE}:") and "kubectl delete" in m for m in found)
 
 
+CREW_ASK = "> Ask first: changes the cluster. Run it yourself after review."
+K8S_SKILLS_ASK = "> Ask first: the agent runs this only after the user approves it."
+
+
+def append(repo: Path, rel: str, text: str) -> None:
+    path = repo / rel
+    path.write_text(path.read_text(encoding="utf-8") + text, encoding="utf-8")
+
+
 @network
-def test_ask_first_block_is_allowed(tmp_path):
+def test_crew_ask_first_block_is_allowed(tmp_path):
     repo = make_repo(tmp_path)
-    path = repo / RECIPE
-    path.write_text(
-        path.read_text(encoding="utf-8")
-        + "\n> Ask first: the agent runs this only after the user approves it.\n\n"
-        + "```bash\nkubectl uncordon my-node\n# Undo: kubectl cordon my-node\n```\n",
-        encoding="utf-8",
+    append(
+        repo,
+        RECIPE,
+        f"\n{CREW_ASK}\n\n```bash\nkubectl uncordon my-node\n# Undo: kubectl cordon my-node\n```\n",
     )
     assert messages(repo) == []
+
+
+@network
+def test_crew_ask_first_block_is_checked_as_ask_first(tmp_path):
+    """The crew marker maps to the pinned checker's ask-first rules: an undo is required."""
+    repo = make_repo(tmp_path)
+    append(repo, RECIPE, f"\n{CREW_ASK}\n\n```bash\nkubectl uncordon my-node\n```\n")
+    found = messages(repo)
+    assert any(m.startswith(f"{RECIPE}:") and "ask-first change needs" in m for m in found)
+
+
+@network
+def test_k8s_skills_ask_marker_is_refused_in_crew_files(tmp_path):
+    """In a crew report it would say the agent runs the fix after approval: it never does."""
+    repo = make_repo(tmp_path)
+    append(
+        repo,
+        RECIPE,
+        f"\n{K8S_SKILLS_ASK}\n\n```bash\nkubectl uncordon my-node\n"
+        "# Undo: kubectl cordon my-node\n```\n",
+    )
+    found = messages(repo)
+    assert any(m.startswith(f"{RECIPE}:") and "crew ask-first marker" in m for m in found)
+
+
+@network
+def test_crew_marker_maps_to_the_pinned_marker():
+    from tools.crewcheck import CREW_ASK_MARKER, crew_markdown
+
+    module = load_checker().commands_module
+    assert CREW_ASK_MARKER == CREW_ASK
+    text = f"a\n{CREW_ASK}\n\nb\n"
+    assert crew_markdown(text, module) == f"a\n{module.ASK_MARKER}\n\nb\n"
+
+
+def test_report_template_and_role_use_the_crew_marker():
+    for rel in (RECIPE, ROLE):
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        assert CREW_ASK in text, rel
+        assert K8S_SKILLS_ASK not in text, rel
+        assert "> Proposed fix: review before running. The agent does not run this." in text
 
 
 @network
@@ -170,14 +220,39 @@ def test_herdr_runner_forbids_resend(tmp_path):
 
 
 @network
-def test_herdr_runner_sets_viewer_kubeconfig(tmp_path):
+def test_herdr_runner_starts_panes_through_the_launcher(tmp_path):
     repo = make_repo(tmp_path)
     path = repo / HERDR
     path.write_text(
-        path.read_text(encoding="utf-8").replace("export KUBECONFIG=", "KUBECONFIG="),
+        path.read_text(encoding="utf-8").replace("crew-start.sh --viewer", "crew-start.sh"),
         encoding="utf-8",
     )
-    assert any(m.startswith(HERDR) and "export KUBECONFIG=" in m for m in messages(repo))
+    assert any(m.startswith(HERDR) and "crew-start.sh --viewer" in m for m in messages(repo))
+
+
+def herdr_commands() -> list[str]:
+    text = (ROOT / HERDR).read_text(encoding="utf-8")
+    blocks = re.findall(r"^```bash\n(.*?)^```", text, re.MULTILINE | re.DOTALL)
+    return [line for block in blocks for line in block.splitlines() if line.strip()]
+
+
+def test_herdr_runner_commands_follow_the_boss_rules():
+    """SKILL.md: no shell variables, no chaining, no job control in the boss's commands."""
+    commands = herdr_commands()
+    assert commands
+    for line in commands:
+        assert "$" not in line, line
+        assert not re.search(r"&\s*$|&&|\|\||;", line), line
+        assert line.split()[0] != "wait", line
+        assert not line.startswith("test "), line
+
+
+def test_herdr_claude_helpers_get_the_deny_settings():
+    starts = [c for c in herdr_commands() if c.startswith("herdr agent start") and "claude" in c]
+    assert starts
+    for line in starts:
+        assert "--settings <skill-dir>/config/claude-settings.example.json" in line
+        assert "--permission-mode default" in line
 
 
 @network

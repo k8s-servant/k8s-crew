@@ -39,11 +39,18 @@ terminal. Do not print environment variables to check it.
    links the issues.
 7. If a command fails with `Forbidden`, write down what you could not see. Never report
    something you could not see as healthy.
-8. **Run one plain command per call**, written out in full:
+   If it fails with `Unauthorized` or `You must be logged in`, or the kubectl guard
+   refuses it, stop investigating and say so in your reply: the viewer token may have
+   expired. Never try another identity.
+8. Use only the session's viewer identity. Never pass `--kubeconfig`, `--context`,
+   `--cluster`, `--server` or `-s`, `--user`, `--token`, `--as` or any other identity
+   flag, never set `KUBECONFIG`, never call kubectl by its full path, and never read
+   kubeconfig files.
+9. **Run one plain command per call**, written out in full:
    - no `&&`, `;` or `||`, no redirection (`2>&1`, `>`), no `$VAR` or `$(...)`, no
      `cd` and no `echo`;
    - a pipe only into `grep`, `egrep`, `head`, `tail`, `sort`, `uniq`, `wc`, `cut`,
-     `column`, `jq` or `yq` (not `sed`, `awk` or `xargs`);
+     `column` or `jq` (not `sed`, `awk`, `yq` or `xargs`);
    - only these kubectl commands: `get`, `describe`, `logs`, `events`, `top`,
      `explain`, `api-resources`, `api-versions`, `version`, `cluster-info`,
      `auth can-i`, `auth whoami`, `rollout status` and `rollout history`. To see who
@@ -84,8 +91,16 @@ confirmed | likely | not sure, with one sentence on why.
 
 ### Proposed fixes
 
-For each fix: one sentence on what it changes and why, then the marker line the
-specialist skill uses (Ask first or Proposed fix), then a fenced bash block with the
-command, using the real names, and a line that starts with "# Undo:" and reverses it
-(or says why it cannot be undone). Write "None" when no fix is needed.
+For each fix: one sentence on what it changes and why, then a marker line, then a
+fenced bash block with the command, using the real names, and a line that starts with
+"# Undo:" and reverses it (or says why it cannot be undone). The marker line is exactly
+one of:
+
+> Ask first: changes the cluster. Run it yourself after review.
+
+> Proposed fix: review before running. The agent does not run this.
+
+Use Proposed fix wherever the specialist skill does, and for anything destructive or
+hard to undo. Do not copy the skill's own Ask first line: no agent in a crew run runs
+a fix. Write "None" when no fix is needed.
 ````

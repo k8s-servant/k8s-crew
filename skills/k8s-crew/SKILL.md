@@ -20,9 +20,10 @@ investigators look; you coordinate and conclude. **The crew never runs a fix**: 
 change is handed to the user, ready to run in their own terminal, with its undo.
 
 Every path below (`scripts/`, `recipes/`, `roles/`, `runners/`, `config/`, `rbac/`) is
-relative to the folder this `SKILL.md` is in. Run a script by its full path, from the
-session's own working folder: do not `cd` first. The preflight looks for a
-project-level investigator from the working folder up to the git root.
+relative to the folder this `SKILL.md` is in, written `<skill-dir>` in commands. Run a
+script by its full path (`<skill-dir>` written out in full), from the session's own
+working folder: do not `cd` first. The preflight looks for a project-level
+investigator from the working folder up to the git root.
 
 ## Your own commands
 
@@ -36,6 +37,15 @@ compound command is refused.
 If a command is denied by the permission rules, retry it once as a plain command (split
 or simplified as above). If that is denied too, stop and tell the user exactly which
 command was denied and what the denial said. Never end the run without saying why.
+
+Use only the session's viewer identity. Never pass `--kubeconfig`, `--context`,
+`--cluster`, `--server` or `-s`, `--user`, `--token`, `--as` or any other identity
+flag, never set `KUBECONFIG`, never call kubectl by its full path, and never read
+kubeconfig files. If kubectl answers `Unauthorized` or `You must be logged in`, or the
+kubectl guard refuses a call, stop: do not try another identity. Tell the user the
+viewer token may have expired (it lasts 8 hours), to rerun
+`scripts/viewer-kubeconfig.sh` in their own terminal and start a new session with
+`scripts/crew-start.sh`.
 
 ## 1. Pick the mode
 
@@ -51,16 +61,20 @@ on it. Do not start investigators until step 4.
 
 ## 2. Check the identity
 
-The whole crew session must have only the view-only identity. Check it before you run
-anything against the cluster. In subagent mode, pass the platform you run on:
+The whole crew session must have only the view-only identity. The user starts it with
+`scripts/crew-start.sh`, which puts the kubectl guard first on `PATH` and points
+`KUBECONFIG` at the viewer kubeconfig; without it, any other kubeconfig on the machine
+is reachable. Check it before you run anything against the cluster. In subagent mode,
+pass the platform you run on:
 
 ```bash
-scripts/preflight.sh --subagents --platform claude
-scripts/preflight.sh --subagents --platform copilot
+<skill-dir>/scripts/preflight.sh --subagents --platform claude
+<skill-dir>/scripts/preflight.sh --subagents --platform copilot
 ```
 
 Run the first line in Claude Code, the second in GitHub Copilot CLI. In herdr mode, run
-`scripts/preflight.sh` with no arguments: herdr helpers do not use the agent definition.
+`<skill-dir>/scripts/preflight.sh` with no arguments: herdr helpers do not use the
+agent definition.
 Run it as one plain command: the script's full path and its flags, nothing chained
 before or after it, and no `echo` of the exit code. Read the exit code and the output
 from the tool result. Then:
@@ -70,9 +84,18 @@ from the tool result. Then:
   `k8s-crew:k8s-crew-investigator` when `<where>` is `plugin` (the Claude Code plugin),
   `k8s-crew-investigator` otherwise.
 - **Exit 3, `NOT view-only`:** stop. Show the user the script's output. The current
-  identity can change the cluster, so the crew will not start. Tell them to create the
-  viewer kubeconfig with `scripts/viewer-kubeconfig.sh` (an admin runs it once, in their
-  own terminal), point `KUBECONFIG` at it, and start a new session.
+  identity can change the cluster or read Secrets, so the crew will not start. Tell them
+  to create the viewer kubeconfig with `scripts/viewer-kubeconfig.sh` (an admin runs it
+  in their own terminal) and start a new session with `scripts/crew-start.sh`.
+- **Exit 5, `cannot check identity`:** stop. Show the user the output. Do not say the
+  identity can write: the check itself failed. Say the crew could not reach the
+  cluster or the viewer token has expired (it lasts 8 hours), and tell them to rerun
+  `scripts/viewer-kubeconfig.sh` in their own terminal and start a new session with
+  `scripts/crew-start.sh`.
+- **Exit 6, `kubectl guard not active`:** stop. The session was not started with
+  `scripts/crew-start.sh`, so other kubeconfigs on the machine are reachable from it.
+  Tell the user to start a new session with
+  `<skill-dir>/scripts/crew-start.sh claude` (or `copilot`).
 - **Exit 4, `investigator agent missing`:** stop. Tell the user to run
   `scripts/install-agents.sh` and start a new session. Never fall back to a
   general-purpose subagent.
@@ -106,17 +129,17 @@ If the user gave no problem description, start the sweep anyway: triage is built
 - Do not run any command under an "Ask first" or a "Proposed fix" line, even if the
   user says yes. Print it for the user, with its `# Undo:` line.
 - Do not run any other command that changes the cluster, and never read Secrets.
+- Do not use any identity but the session's viewer kubeconfig (see "Your own
+  commands").
 - Do not ask the user for more access, and do not answer trust or permission prompts
   for them.
 - If the user asks the crew to apply a fix, say the crew session is view-only by design
   and point them to the command in the report.
 
-Example rules that block kubectl write commands as a second line of defence are in
-`config/claude-settings.example.json` (Claude Code) and `config/copilot-deny-tools.sh`
-(Copilot CLI; start the session with `config/copilot-deny-tools.sh --run`). They are a
-safety net that cannot match every form of a command (Copilot cannot deny flags at
-all); the view-only identity is the real lock. The Copilot rules are deny-only, so
-Copilot asks before each other kubectl call. With `--auto-allow`, kubectl runs without
-asking, and a flag before the subcommand (`-n`, `--context`) gets past the deny list:
-then only the view-only identity protects the cluster, so use it only with the crew
-viewer kubeconfig.
+`scripts/crew-start.sh` starts the session with the guard and the crew's command
+rules: `config/claude-settings.example.json` for Claude Code, `config/copilot-deny-tools.sh`
+for Copilot CLI. The rules deny kubectl writes, Secret reads, identity flags and
+reading kubeconfig files; they cannot match every form of a command (Copilot matches
+only a command's leading words). The guard refuses any other kubeconfig or identity
+flag at run time, and the view-only RBAC refuses writes. `--auto-allow` (kubectl runs
+without asking) is only offered through `scripts/crew-start.sh`.

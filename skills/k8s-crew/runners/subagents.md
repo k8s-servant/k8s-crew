@@ -5,8 +5,10 @@ GitHub Copilot CLI session. They use the `k8s-crew-investigator` agent definitio
 has read-only tools only (shell, read, search) and cannot edit files or start agents.
 
 Investigators share the boss's process, shell and files, so they have the same
-view-only kubeconfig the boss checked with `scripts/preflight.sh`. Nothing extra is
-needed for their identity.
+view-only kubeconfig and the same kubectl guard the boss checked with
+`scripts/preflight.sh`. That is why the session must be started with
+`scripts/crew-start.sh`: without the guard, any other kubeconfig on the machine is
+reachable from every agent in the session. Nothing extra is needed for their identity.
 
 ## Before you start
 
@@ -33,7 +35,7 @@ parallel, then wait for all of them. Each `prompt` is the investigator's task fr
 step 2 of the recipe: the issue, object and namespace, triage's evidence, the specialist
 skill and its `SKILL.md` path if known, and "Run one plain read-only command per call
 (no chaining, redirection, variables, cd or echo; pipe only into grep, egrep, head,
-tail, sort, uniq, wc, cut, column, jq or yq). Reply in the shape from your instructions: Finding,
+tail, sort, uniq, wc, cut, column or jq). Reply in the shape from your instructions: Finding,
 Evidence, Confidence, Proposed fixes."
 
 Up to 3 investigators by default, 4 at most.
@@ -52,18 +54,22 @@ Business 16, Enterprise 32). Use more only when the user says their plan allows 
 never more than 4.
 
 Copilot CLI applies the session's `--allow-tool` and `--deny-tool` rules to subagents
-too. The user starts the session with `config/copilot-deny-tools.sh --run` (by its full
-path, in place of `copilot`; any further arguments go to `copilot`). It denies every
-kubectl command that is not read-only, and Secret reads, and allows nothing: Copilot
-asks the user before each other kubectl call, and those prompts are the user's to
-answer. Copilot rules match only a command's leading words: an allow rule cannot name
-a subcommand, and a flag written before the subcommand (`-n my-namespace`,
-`--context` or `--kubeconfig` before `delete`) is not matched by any deny rule.
+too. The user starts the session with `scripts/crew-start.sh copilot` (by its full
+path, in place of `copilot`; any further arguments go to `copilot`). It runs
+`config/copilot-deny-tools.sh --run` behind the kubectl guard: every kubectl command
+that is not read-only, Secret reads, identity flags written first and reads of
+kubeconfig and credential files are denied, and nothing is allowed, so Copilot asks
+the user before each other kubectl call; those prompts are the user's to answer.
+Copilot rules match only a command's leading words: an allow rule cannot name a
+subcommand, and a flag written before the subcommand (`-n my-namespace delete ...`) is
+not matched by a subcommand deny rule. The guard refuses identity flags anywhere.
 
-`config/copilot-deny-tools.sh --auto-allow --run` also allows every kubectl call, so
+`scripts/crew-start.sh --auto-allow copilot` also allows every kubectl call, so
 investigators run without prompts. Then a flag before the subcommand gets past the
-deny list and **only the view-only identity protects the cluster**. Use `--auto-allow`
-only with the crew viewer kubeconfig.
+subcommand deny list, and the guard and the view-only identity protect the cluster.
+`--auto-allow` is refused without the guard. Residual risk: Copilot cannot deny a
+kubectl binary called by its full path, which skips the guard; keep the admin
+kubeconfig out of the session's reach where you can (see `docs/safety.md`).
 
 Docs: https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/create-custom-agents-for-cli
 

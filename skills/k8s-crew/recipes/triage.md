@@ -19,12 +19,23 @@ Rules for the whole run:
   - no `&&`, `;` or `||`, no redirection (`2>&1`, `>`), no `$VAR` or `$(...)`, no `cd`
     and no `echo`. Run scripts by their full path;
   - a pipe only into `grep`, `egrep`, `head`, `tail`, `sort`, `uniq`, `wc`, `cut`,
-    `column`, `jq` or `yq` (not `sed`, `awk` or `xargs`);
+    `column` or `jq` (not `sed`, `awk`, `yq` or `xargs`);
   - only these kubectl commands: `get`, `describe`, `logs`, `events`, `top`,
     `explain`, `api-resources`, `api-versions`, `version`, `cluster-info`,
     `auth can-i`, `auth whoami`, `rollout status` and `rollout history`. Use
     `kubectl auth whoami` to see the identity, not the kubeconfig context. When
     `kubectl top` fails, write "metrics not available" and go on.
+- **Only the viewer identity.** Never pass `--kubeconfig`, `--context`, `--cluster`,
+  `--server` or `-s`, `--user`, `--token`, `--as` or any other identity flag, never set
+  `KUBECONFIG`, never call kubectl by its full path, and never read kubeconfig files.
+  The session was started with the crew viewer kubeconfig and the kubectl guard
+  refuses anything else.
+- **Unauthorized, Forbidden everywhere, or an expired token: stop.** If kubectl
+  answers `Unauthorized` or `You must be logged in`, or the kubectl guard refuses a
+  call, do not look for another identity or kubeconfig. Stop and tell the user: the
+  viewer token lasts 8 hours; they rerun `scripts/viewer-kubeconfig.sh` in their own
+  terminal and start a new session with `scripts/crew-start.sh`. A single `Forbidden`
+  is normal for a viewer: write down what could not be seen and go on.
 - **A denied command is retried once, then reported.** If a permission rule denies a
   command, run it again once as a plain command. If it is still denied, the boss stops
   and tells the user which command was denied and why. A run never ends without a
@@ -112,11 +123,21 @@ none.
 
 ## Fixes
 
-The fixes in the order to run them. For each: one sentence on what it changes, the
-marker line (Ask first, or Proposed fix for anything destructive or hard to undo, which
-needs extra review), and a fenced bash block with the command and its "# Undo:" line.
-End with: "The crew did not run these. Run the ones you agree with in your own
-terminal." For a clean sweep: "No fixes needed."
+The fixes in the order to run them. For each: one sentence on what it changes, a
+marker line, and a fenced bash block with the command and its "# Undo:" line. The
+marker line is exactly one of:
+
+> Ask first: changes the cluster. Run it yourself after review.
+
+> Proposed fix: review before running. The agent does not run this.
+
+Use Proposed fix for anything destructive or hard to undo, which needs extra review,
+and wherever the specialist skill uses it. Do not copy the specialist skill's own Ask
+first line: it says the agent runs the fix after approval, and in a crew run no agent
+does. A host action (on a node, outside the cluster) also gets a fenced block, under
+the Proposed fix line, with its "# Undo:" line. End with: "The crew did not run these.
+Run the ones you agree with in your own terminal." For a clean sweep, the section is
+exactly "No fixes needed." and nothing else.
 
 ## What was checked
 
