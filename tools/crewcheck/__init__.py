@@ -284,6 +284,9 @@ def check_agent(repo: Path) -> list[Finding]:
         for tool in (t.strip() for t in tools.split(",")):
             if tool not in AGENT_TOOLS:
                 found.append(Finding(AGENT, 1, f"tool not allowed for the investigator: {tool}"))
+    if not isinstance(meta.get("skills"), list):
+        # Copilot CLI refuses the agent when skills is missing a value ("Expected array").
+        found.append(Finding(AGENT, 1, "skills must be a YAML list, for example skills: []"))
     if (repo / ROLE).is_file() and text != expected_agent(repo, text):
         found.append(Finding(AGENT, None, f"body differs from {ROLE}: {WRITE_HINT}"))
     return found

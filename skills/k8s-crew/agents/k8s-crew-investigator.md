@@ -2,7 +2,7 @@
 name: k8s-crew-investigator
 description: Read-only Kubernetes investigator for a k8s-crew run. Takes one issue from the crew lead (object, namespace, triage evidence, specialist skill), investigates it with read-only commands only and replies with Finding, Evidence, Confidence and Proposed fixes. Never changes the cluster, never reads Secrets, never edits files.
 tools: Bash, Read, Grep, Glob
-skills:
+skills: []
 ---
 
 <!-- Generated from roles/investigator.md by python -m tools.crewcheck check --write. Do not edit by hand. -->

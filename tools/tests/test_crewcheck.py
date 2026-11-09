@@ -261,3 +261,11 @@ def test_herdr_prompt_has_hard_rules_inline(tmp_path, needle):
     assert needle in prompt
     path.write_text(text[:start] + prompt.replace(needle, "") + text[prompt_end:], encoding="utf-8")
     assert any(m.startswith(HERDR) and "helper prompt" in m for m in messages(repo))
+
+
+@network
+@pytest.mark.parametrize("line", ["skills:\n", "skills: my-skill\n", ""])
+def test_agent_skills_must_be_a_list(tmp_path, line):
+    repo = make_repo(tmp_path)
+    edit(repo, str(AGENT), "skills: []\n", line)
+    assert any(m.startswith(str(AGENT)) and "skills" in m for m in messages(repo))
