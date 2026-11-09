@@ -10,6 +10,7 @@ import pytest
 from tools.score import (
     JUDGE_ITEMS,
     baseline_problems,
+    claude_cost,
     claude_final_report,
     copilot_final_report,
     hard_checks,
@@ -183,7 +184,13 @@ def test_judge_from_envelope_rejects_error():
 
 
 def write_scored_run(
-    root: Path, name: str, duration: int, hard: bool, judge: bool, mode: str = "subagents"
+    root: Path,
+    name: str,
+    duration: int,
+    hard: bool,
+    judge: bool,
+    mode: str = "subagents",
+    cost: float | None = None,
 ) -> None:
     run = root / "healthy-noise" / name
     run.mkdir(parents=True)
@@ -194,6 +201,8 @@ def write_scored_run(
         "k8s_skills_ref": "v0.10.0",
         "duration_seconds": duration,
     }
+    if cost is not None:
+        meta["cost_usd"] = cost
     (run / "meta.json").write_text(json.dumps(meta))
     score = {"hard": {"pass": hard}, "judge": {"pass": judge}, "pass": hard and judge}
     (run / "score.json").write_text(json.dumps(score))
@@ -205,13 +214,54 @@ def test_summarize_table(tmp_path):
     table = summarize(tmp_path)
     lines = table.splitlines()
     assert lines[0].startswith("| Scenario | Agent | Mode | Runs |")
-    assert "| healthy-noise | claude | subagents | 2 | 2 | 1 | 150 |" in lines
+    assert lines[0].endswith("| Median duration (s) | Median cost (USD) |")
+    assert "| healthy-noise | claude | subagents | 2 | 2 | 1 | 150 | - |" in lines
 
 
 def test_summarize_unscored_run_counts_as_run_only(tmp_path):
     write_scored_run(tmp_path, "claude-single-1", 60, True, True, mode="single")
     (tmp_path / "healthy-noise" / "claude-single-1" / "score.json").unlink()
-    assert "| healthy-noise | claude | single | 1 | 0 | 0 | 60 |" in summarize(tmp_path)
+    assert "| healthy-noise | claude | single | 1 | 0 | 0 | 60 | - |" in summarize(tmp_path)
+
+
+def test_summarize_median_cost_per_run(tmp_path):
+    write_scored_run(tmp_path, "claude-subagents-1", 100, True, True, cost=1.31)
+    write_scored_run(tmp_path, "claude-subagents-2", 200, True, True, cost=0.75)
+    write_scored_run(tmp_path, "claude-subagents-3", 300, True, True, cost=0.40)
+    lines = summarize(tmp_path).splitlines()
+    assert "| healthy-noise | claude | subagents | 3 | 3 | 3 | 200 | 0.75 |" in lines
+
+
+MULTI = FIXTURES / "claude-stream-multi-result.jsonl"
+
+
+def test_claude_cost_is_the_last_result_not_a_sum():
+    # One result event per orchestrator wake-up; total_cost_usd is cumulative.
+    assert claude_cost(MULTI) == 1.31
+
+
+def test_claude_final_report_is_the_last_result():
+    assert claude_final_report(MULTI) == "## Root cause\n\nfinal\n"
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [{"type": "assistant", "message": {}}],
+        [{"type": "result", "result": "x"}],
+        [{"type": "result", "result": "x", "total_cost_usd": "1.0"}],
+        [{"type": "result", "total_cost_usd": 1.0}, {"type": "result", "result": "x"}],
+    ],
+)
+def test_claude_cost_unknown(tmp_path, events):
+    path = tmp_path / "stream.jsonl"
+    path.write_text("".join(json.dumps(e) + "\n" for e in events))
+    assert claude_cost(path) is None
+
+
+def test_cost_command_prints_the_last_cost(tmp_path, capsys):
+    assert main(["cost", "--claude", str(MULTI)]) == 0
+    assert capsys.readouterr().out == "1.31\n"
 
 
 def test_claude_final_report(tmp_path):
@@ -374,7 +424,8 @@ kubectl -shttps://example.com get pods > /dev/null 2>&1; echo "guard server=$?" 
 bash='{"type":"assistant","parent_tool_use_id":null,"message":{"content":['
 bash+='{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"kubectl get nodes"}}]}}'
 echo "$bash"
-python3 -c 'import json,sys; print(json.dumps({"type":"result","result":sys.argv[1]}))' \\
+echo '{"type":"result","result":"Started the investigators.","total_cost_usd":0.25}'
+python3 -c 'import json,sys; print(json.dumps({"type":"result","result":sys.argv[1],"total_cost_usd":0.5}))' \\
   "$(cat "$FAKE_REPORT")"
 """
 
@@ -481,6 +532,7 @@ def test_crew_subagents_run(tmp_path):
     assert str(skill) in meta["skill_dirs"] and str(skill.resolve()) in meta["skill_dirs"]
     assert any(d.endswith("/project/.claude/skills/k8s-crew") for d in meta["skill_dirs"])
     assert meta["viewer"].endswith("/viewer.kubeconfig")
+    assert meta["cost_usd"] == 0.5
     log = (tmp_path / "calls.log").read_text()
     assert "arg=/k8s-crew I see Warning events in my-namespace." in log
     assert "kubeconfig=" in log and "viewer.kubeconfig" in log

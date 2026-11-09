@@ -12,6 +12,7 @@ Command line (run from the repository root)::
     python -m tools.score transcript --claude|--copilot SOURCE [--baseline] OUT
     python -m tools.score final-report --claude|--copilot SOURCE OUT
     python -m tools.score score RUN_DIR [--judge-output FILE]
+    python -m tools.score cost --claude SOURCE
     python -m tools.score summarize RUNS_ROOT
 """
 
@@ -231,6 +232,20 @@ def claude_final_report(path: Path) -> str:
     return results[-1]["result"]
 
 
+def claude_cost(path: Path) -> float | None:
+    """``total_cost_usd`` of the last ``type: result`` event of a Claude stream, or None.
+
+    A stream has one result event per time the orchestrator wakes up (after subagents
+    reply), and ``total_cost_usd`` repeats the cumulative total in each, so only the last
+    one counts. Never sum them; never fall back to an earlier one.
+    """
+    results = [e for e in _jsonl(path) if e.get("type") == "result"]
+    cost = results[-1].get("total_cost_usd") if results else None
+    if isinstance(cost, bool) or not isinstance(cost, int | float):
+        return None
+    return float(cost)
+
+
 def _copilot_events(path: Path) -> list[dict]:
     events = _jsonl(path)
     if not any(str(e.get("type", "")).startswith(("session.", "assistant.")) for e in events):
@@ -319,28 +334,41 @@ def copilot_final_report(path: Path) -> str:
 
 
 def summarize(runs_root: Path) -> str:
-    """Markdown table per scenario x agent x mode: runs, passes, median duration."""
+    """Markdown table per scenario x agent x mode: runs, passes, median duration and cost.
+
+    The cost is each run's ``cost_usd`` from ``meta.json`` (the last result event's
+    cumulative total, see ``claude_cost``); "-" when no run in the group has one.
+    """
     groups: dict[tuple[str, str, str], dict] = {}
     for meta_path in sorted(Path(runs_root).glob("*/*/meta.json")):
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         key = (meta["scenario"], meta["agent"], meta["mode"])
-        group = groups.setdefault(key, {"runs": 0, "hard": 0, "judge": 0, "durations": []})
+        group = groups.setdefault(
+            key, {"runs": 0, "hard": 0, "judge": 0, "durations": [], "costs": []}
+        )
         group["runs"] += 1
         group["durations"].append(meta.get("duration_seconds", 0))
+        cost = meta.get("cost_usd")
+        if isinstance(cost, int | float) and not isinstance(cost, bool):
+            group["costs"].append(cost)
         score_path = meta_path.parent / "score.json"
         if score_path.is_file():
             score = json.loads(score_path.read_text(encoding="utf-8"))
             group["hard"] += bool((score.get("hard") or {}).get("pass"))
             group["judge"] += bool((score.get("judge") or {}).get("pass"))
     lines = [
-        "| Scenario | Agent | Mode | Runs | Hard-check passes | Judge passes | Median duration (s) |",
-        "|---|---|---|---|---|---|---|",
+        (
+            "| Scenario | Agent | Mode | Runs | Hard-check passes | Judge passes "
+            "| Median duration (s) | Median cost (USD) |"
+        ),
+        "|---|---|---|---|---|---|---|---|",
     ]
     for (scenario, agent, mode), g in sorted(groups.items()):
         median = statistics.median(g["durations"])
+        cost = f"{statistics.median(g['costs']):.2f}" if g["costs"] else "-"
         lines.append(
             f"| {scenario} | {agent} | {mode} | {g['runs']} | {g['hard']} | {g['judge']} "
-            f"| {median:.0f} |"
+            f"| {median:.0f} | {cost} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -378,6 +406,8 @@ def main(argv: list[str] | None = None) -> int:
                 help="single-agent run: fail if it started subagents or loaded k8s-crew",
             )
         p.add_argument("out", type=Path)
+    p = sub.add_parser("cost", help="cost of a claude run: the last result event's total")
+    p.add_argument("--claude", type=Path, required=True, help="claude stream-json output")
     p = sub.add_parser("score")
     p.add_argument("run_dir", type=Path)
     p.add_argument("--judge-output", type=Path)
@@ -398,6 +428,9 @@ def main(argv: list[str] | None = None) -> int:
             kind, path = _source(args)
             text = claude_final_report(path) if kind == "claude" else copilot_final_report(path)
             args.out.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
+        elif args.command == "cost":
+            cost = claude_cost(args.claude)
+            print("" if cost is None else f"{cost:g}")
         elif args.command == "score":
             score = score_run(args.run_dir, args.judge_output)
             out = args.run_dir / "score.json"

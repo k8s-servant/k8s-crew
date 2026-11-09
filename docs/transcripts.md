@@ -123,3 +123,13 @@ calls). The run then has no `transcript.jsonl`; the reason is in
 `transcript-error.txt`, and scoring fails it with `transcript unavailable: not a valid
 single-agent baseline: ...`. This matters for Copilot, which still loads the user's own
 agents and skills from `~/.copilot`.
+
+## Cost
+
+Claude Code writes one `result` event to `stream.jsonl` each time the orchestrator
+wakes up (after its subagents reply). Each carries `total_cost_usd`, the cumulative
+cost so far, so the run's cost is the value in the last result event; summing them
+overcounts. `tests/crew.sh` records it in `meta.json` as `cost_usd`
+(`python -m tools.score cost --claude stream.jsonl`), and `tools.score summarize` shows
+the median per scenario, agent and mode. The final report is also the last result
+event's text. Copilot runs have no cost (`null`).

@@ -187,11 +187,11 @@ a single agent with k8s-skills and no crew. Every run is scored by script (only
 read-only commands, no Secret reads, the report's shape) and by an AI judge against the
 scenario's expected answer.
 
-| Scenario | Agent | Mode | Runs | Hard-check passes | Judge passes | Median time |
-|---|---|---|---|---|---|---|
-| `node-dns-cascade` | | | | | | |
-| `rollout-plus-storage` | | | | | | |
-| `healthy-noise` | | | | | | |
+| Scenario | Agent | Mode | Runs | Hard-check passes | Judge passes | Median time | Median cost |
+|---|---|---|---|---|---|---|---|
+| `node-dns-cascade` | | | | | | | |
+| `rollout-plus-storage` | | | | | | | |
+| `healthy-noise` | | | | | | | |
 
 The table is filled in before the first release, with crew and baseline side by side.
 
