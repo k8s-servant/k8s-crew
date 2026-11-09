@@ -66,15 +66,43 @@ read_verbs=(
   "auth can-i" "auth whoami" "rollout status" "rollout history"
   "config current-context" "config get-contexts"
 )
-filters=(grep egrep head tail sort uniq wc cut column jq yq)
+# Pipe filters. None of them may write a file: yq (-i) is left out; Claude also denies
+# sort -o and uniq's output-file argument. Copilot cannot match flags inside a command,
+# so it gets only the filters that have no file-writing form.
+filters=(grep egrep head tail sort uniq wc cut column jq)
+copilot_filters=(grep egrep head tail wc cut column jq)
+# kubectl flags that pick another kubeconfig, cluster, server or identity. The run must
+# only ever use the viewer kubeconfig on the test cluster.
+target_flags=(
+  --kubeconfig --context --cluster --server -s --token --user --username --password
+  --as --as-group --as-uid --client-certificate --client-key --certificate-authority
+)
+# Every kubectl subcommand that is not in read_verbs. Copilot allow rules cannot name a
+# kubectl subcommand (only deny rules can), so Copilot allows kubectl and denies these.
+copilot_denied_verbs=(
+  create expose run set edit delete scale autoscale certificate cordon uncordon drain
+  taint attach exec port-forward proxy cp debug diff apply patch replace wait kustomize
+  label annotate completion plugin alpha options
+  "rollout restart" "rollout undo" "rollout pause" "rollout resume" "auth reconcile"
+  "config view" "config set" "config set-cluster" "config set-context"
+  "config set-credentials" "config unset" "config use-context" "config use"
+  "config delete-cluster" "config delete-context" "config delete-user"
+  "config rename-context" "get secret" "get secrets" "describe secret" "describe secrets"
+)
+# Local files the agent must not read: other kubeconfigs and credentials, the agent
+# configs, the test cluster's admin kubeconfig, and the scenario answers.
+private_paths=(
+  "$HOME/.kube" "$HOME/.claude" "$HOME/.copilot" "$HOME/.config/gh"
+  "$REPO_ROOT/.kube" "$REPO_ROOT/tests" "$REPO_ROOT/runs"
+)
 preflights=(
   "$skill_dir/scripts/preflight.sh"
   ".claude/skills/k8s-crew/scripts/preflight.sh"
 )
 
 claude_flags() {
-  local project="$1" verb tool tools="Bash,Read,Grep,Glob,Skill"
-  local allowed=(Read Grep Glob Skill)
+  local project="$1" verb tool flag dir tools="Bash,Read,Grep,Glob,Skill"
+  local allowed=(Read Grep Glob Skill) denied=()
   [[ "$mode" == subagents ]] && { tools="$tools,Agent"; allowed+=(Agent); }
   for verb in "${read_verbs[@]}"; do allowed+=("Bash(kubectl $verb)" "Bash(kubectl $verb *)"); done
   for tool in "${filters[@]}"; do allowed+=("Bash($tool *)"); done
@@ -83,12 +111,24 @@ claude_flags() {
       allowed+=("Bash($tool)" "Bash($tool *)")
     done
   fi
+  # Deny rules win over allow rules (checked: claude -p, dontAsk).
+  for flag in "${target_flags[@]}"; do
+    if [[ "$flag" == --* ]]; then
+      denied+=("Bash(kubectl *$flag*)")
+    else
+      denied+=("Bash(kubectl * $flag *)" "Bash(kubectl * $flag=*)" "Bash(kubectl * $flag)")
+    fi
+  done
+  denied+=("Bash(sort *-o*)" "Bash(sort *--output*)" "Bash(uniq * *)")
+  # "//" starts an absolute path in Claude Code permission rules.
+  for dir in "${private_paths[@]}"; do denied+=("Read(/$dir/**)"); done
   # shellcheck disable=SC2054 # commas belong to the flag values
   flags=(
     --output-format stream-json --verbose
     --setting-sources project,local --strict-mcp-config --no-session-persistence
     --settings "$skill_dir/config/claude-settings.example.json"
     --permission-mode dontAsk --tools "$tools" --allowedTools "${allowed[@]}"
+    --disallowedTools "${denied[@]}"
     --add-dir "$k8s_skills" --max-budget-usd "${CREW_MAX_BUDGET_USD:-10}"
   )
   [[ "$mode" == subagents ]] && flags+=(--add-dir "$skill_dir")
@@ -96,16 +136,20 @@ claude_flags() {
 }
 
 copilot_flags() {
-  local project="$1" session="$2" verb tool
+  local project="$1" session="$2" verb tool flag dir
   # The deny script prints the flags shell-quoted, ready for eval.
   eval "flags=($("$skill_dir/config/copilot-deny-tools.sh"))"
   flags+=(
     --trust-folder --session-id "$session" --output-format json --no-ask-user
     --no-auto-update --disable-builtin-mcps --no-custom-instructions
-    --add-dir "$k8s_skills" --allow-tool read
+    --add-dir "$k8s_skills" --allow-tool read --allow-tool "shell(kubectl:*)"
   )
-  for verb in "${read_verbs[@]}"; do flags+=(--allow-tool "shell(kubectl $verb:*)"); done
-  for tool in "${filters[@]}"; do flags+=(--allow-tool "shell($tool:*)"); done
+  for verb in "${copilot_denied_verbs[@]}"; do flags+=(--deny-tool "shell(kubectl $verb:*)"); done
+  # Copilot matches only a command's leading words, so a target flag is denied here only
+  # when it comes first; the kubectl guard on PATH refuses it anywhere.
+  for flag in "${target_flags[@]}"; do flags+=(--deny-tool "shell(kubectl $flag:*)"); done
+  for dir in "${private_paths[@]}"; do flags+=(--deny-tool "read($dir/**)"); done
+  for tool in "${copilot_filters[@]}"; do flags+=(--allow-tool "shell($tool:*)"); done
   if [[ "$mode" == single ]]; then
     flags+=(--excluded-tools task)
   else
@@ -114,6 +158,39 @@ copilot_flags() {
       flags+=(--allow-tool "shell($tool:*)")
     done
   fi
+}
+
+# A kubectl first on the agent's PATH that runs the real one only with the viewer
+# kubeconfig and without any flag that picks another kubeconfig, cluster or identity.
+# It is the runtime lock behind the permission rules (Copilot rules cannot match flags).
+make_guard() {
+  local bin="$1" viewer="$2" real
+  real="$(command -v kubectl)"
+  mkdir -p "$bin"
+  {
+    echo '#!/usr/bin/env bash'
+    echo '# k8s-crew test guard, written by tests/crew.sh for one run.'
+    printf 'viewer=%q\nreal=%q\n' "$viewer" "$real"
+    printf 'flags=(%s)\n' "${target_flags[*]}"
+    cat <<'GUARD'
+refuse() {
+  echo "k8s-crew test guard: $1; this run may only use its view-only kubeconfig" >&2
+  exit 126
+}
+[[ "${KUBECONFIG:-}" == "$viewer" ]] || refuse "KUBECONFIG is not the viewer kubeconfig"
+for arg in "$@"; do
+  for flag in "${flags[@]}"; do
+    # A short flag also takes its value attached: -sURL.
+    if [[ "$arg" == "$flag" || "$arg" == "$flag="* || ("$flag" != --* && "$arg" == "$flag"?*) ]]
+    then
+      refuse "$flag is not allowed"
+    fi
+  done
+done
+exec "$real" "$@"
+GUARD
+  } > "$bin/kubectl"
+  chmod 755 "$bin/kubectl"
 }
 
 # A fresh git project with the skills (and, for the crew, the investigator) linked in.
@@ -166,19 +243,20 @@ for ((i = 1; i <= runs; i++)); do
   "$skill_dir/scripts/viewer-kubeconfig.sh" --out "$work/viewer.kubeconfig" > /dev/null
   project="$work/project"
   make_project "$project"
+  make_guard "$work/bin" "$work/viewer.kubeconfig"
 
   started=$SECONDS
   status=0
   if [[ "$agent" == claude ]]; then
     claude_flags "$project"
-    (cd "$project" && KUBECONFIG="$work/viewer.kubeconfig" \
+    (cd "$project" && KUBECONFIG="$work/viewer.kubeconfig" PATH="$work/bin:$PATH" \
       claude -p "$prompt" "${flags[@]}" < /dev/null > "$run_dir/stream.jsonl" \
       2> "$run_dir/stderr.txt") || status=$?
     source_args=(--claude "$run_dir/stream.jsonl")
   else
     session="$(uuidgen | tr '[:upper:]' '[:lower:]')"
     copilot_flags "$project" "$session"
-    (cd "$project" && KUBECONFIG="$work/viewer.kubeconfig" \
+    (cd "$project" && KUBECONFIG="$work/viewer.kubeconfig" PATH="$work/bin:$PATH" \
       copilot -p "$prompt" "${flags[@]}" < /dev/null > "$run_dir/stream.jsonl" \
       2> "$run_dir/stderr.txt") || status=$?
     # The session's own event log is the verified format; read it, not stdout.
@@ -194,9 +272,17 @@ for ((i = 1; i <= runs; i++)); do
   duration=$((SECONDS - started))
   [[ "$status" -eq 0 ]] || { echo "warning: $agent exited $status" >&2; failed=1; }
 
-  # A transcript that cannot be read is left out, so scoring fails "transcript unavailable".
-  (cd "$REPO_ROOT" && "$py" -m tools.score transcript "${source_args[@]}" \
-    "$run_dir/transcript.jsonl") || rm -f "$run_dir/transcript.jsonl"
+  # A transcript that cannot be read (or a baseline that used the crew) is left out, so
+  # scoring fails "transcript unavailable" with the reason from transcript-error.txt.
+  baseline=()
+  [[ "$mode" == single ]] && baseline=(--baseline)
+  if ! (cd "$REPO_ROOT" && "$py" -m tools.score transcript "${source_args[@]}" \
+    "${baseline[@]}" "$run_dir/transcript.jsonl" 2> "$run_dir/transcript-error.txt"); then
+    rm -f "$run_dir/transcript.jsonl"
+    cat "$run_dir/transcript-error.txt" >&2
+  else
+    rm -f "$run_dir/transcript-error.txt"
+  fi
   (cd "$REPO_ROOT" && "$py" -m tools.score final-report "${source_args[@]}" \
     "$run_dir/report.md") || rm -f "$run_dir/report.md"
 

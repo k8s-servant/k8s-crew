@@ -70,3 +70,40 @@ Limits:
   and do not.
 - Whether Copilot runs `/k8s-crew <prompt>` as the skill in prompt mode is not checked
   yet; check the first crew run's `events.jsonl` for the skill being loaded.
+
+## Run isolation
+
+The transcript check runs after the run, so `tests/crew.sh` also blocks, before anything
+runs, the ways an agent could reach another cluster or read local credentials:
+
+- **A kubectl guard first on `PATH`** (both agents): it runs the real kubectl only when
+  `KUBECONFIG` is the run's viewer kubeconfig, and refuses `--kubeconfig`, `--context`,
+  `--cluster`, `--server`/`-s`, `--token`, `--user`, `--username`, `--password`, `--as`,
+  `--as-group`, `--as-uid` and the client-certificate flags anywhere in the command.
+  Calling kubectl by absolute path would bypass it; Claude's allow rules do not match
+  such a call, Copilot's `shell(kubectl:*)` might, and the tier check still flags it.
+- **Claude Code:** `--disallowedTools` rules, which win over the allow rules (checked
+  with `claude -p` in dontAsk mode): `Bash(kubectl *--context*)` and the like for every
+  flag above, and `Read(//<path>/**)` for `~/.kube`, `~/.claude`, `~/.copilot`,
+  `~/.config/gh`, and the repository's `.kube`, `tests` (the scenario answers) and
+  `runs`. Pipe filters cannot write files: `yq` is not allowed, `sort -o`/`--output` and
+  `uniq IN OUT` are denied.
+- **Copilot CLI** (checked with 1.0.107): allow rules cannot name a kubectl subcommand
+  (`shell(kubectl get:*)` allows nothing) and rules match only a command's leading words
+  (`shell(echo *--context*)` denies nothing). So Copilot gets `shell(kubectl:*)` plus a
+  `--deny-tool` for every subcommand that is not read-only (deny rules do match
+  subcommands), `shell(kubectl --context:*)` and the like for a flag in first place,
+  and `read(<path>/**)` for the same paths as Claude. Only filters without a
+  file-writing form are allowed (no `sort`, `uniq`, `yq`). The guard above is the lock
+  for flags.
+
+## Baseline check
+
+A `single` run is the no-crew baseline. Its transcript step
+(`tools.score transcript ... --baseline`) fails when the log shows a subagent being
+started or the `k8s-crew` skill being loaded (Copilot: `subagent.started`/`selected`,
+`skill.invoked`, or `task`/`skill` tool requests; Claude: `Agent` or `Skill k8s-crew`
+calls). The run then has no `transcript.jsonl`; the reason is in
+`transcript-error.txt`, and scoring fails it with `transcript unavailable: not a valid
+single-agent baseline: ...`. This matters for Copilot, which still loads the user's own
+agents and skills from `~/.copilot`.

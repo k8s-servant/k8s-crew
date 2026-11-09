@@ -1,3 +1,4 @@
+import itertools
 import json
 import os
 import shutil
@@ -7,6 +8,7 @@ import pytest
 
 from tools.score import (
     JUDGE_ITEMS,
+    baseline_problems,
     claude_final_report,
     copilot_final_report,
     hard_checks,
@@ -275,11 +277,28 @@ FAKE_CLAUDE = """#!/usr/bin/env bash
   echo "claude cwd=$PWD kubeconfig=$KUBECONFIG"
   printf 'arg=%s\\n' "$@"
 } >> "$FAKE_LOG"
+# Try the cluster through PATH, as the agent's shell would.
+kubectl get pods -A > /dev/null 2>&1; echo "guard plain=$?" >> "$FAKE_LOG"
+kubectl get pods --context other > /dev/null 2>&1; echo "guard context=$?" >> "$FAKE_LOG"
+KUBECONFIG=/tmp/other kubectl get pods > /dev/null 2>&1; echo "guard env=$?" >> "$FAKE_LOG"
+kubectl -shttps://example.com get pods > /dev/null 2>&1; echo "guard server=$?" >> "$FAKE_LOG"
 bash='{"type":"assistant","parent_tool_use_id":null,"message":{"content":['
 bash+='{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"kubectl get nodes"}}]}}'
 echo "$bash"
 python3 -c 'import json,sys; print(json.dumps({"type":"result","result":sys.argv[1]}))' \\
   "$(cat "$FAKE_REPORT")"
+"""
+
+
+FAKE_COPILOT = """#!/usr/bin/env bash
+printf 'copilot-arg=%s\\n' "$@" >> "$FAKE_LOG"
+while [[ $# -gt 0 ]]; do
+  [[ "$1" == --session-id ]] && session="$2"
+  shift
+done
+dir="$HOME/.copilot/session-state/$session"
+mkdir -p "$dir"
+cp "$FAKE_EVENTS" "$dir/events.jsonl"
 """
 
 
@@ -295,7 +314,8 @@ def crew_repo(tmp_path: Path) -> tuple[Path, dict]:
     (repo / "tests" / "scenarios" / "healthy-noise" / "break.sh").write_text("exit 0\n")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name, text in (("kubectl", FAKE_KUBECTL), ("claude", FAKE_CLAUDE)):
+    fakes = (("kubectl", FAKE_KUBECTL), ("claude", FAKE_CLAUDE), ("copilot", FAKE_COPILOT))
+    for name, text in fakes:
         (bin_dir / name).write_text(text)
         (bin_dir / name).chmod(0o755)
     log = tmp_path / "calls.log"
@@ -307,6 +327,7 @@ def crew_repo(tmp_path: Path) -> tuple[Path, dict]:
         "FAKE_CONTEXT": CONTEXT,
         "FAKE_REPORT": str(FIXTURES / "report-good.md"),
         "TMPDIR": str(tmp_path),
+        "HOME": str(tmp_path / "home"),
     }
     return repo, env
 
@@ -405,3 +426,134 @@ def test_crew_cleans_up_when_break_fails(tmp_path):
 
 def read_transcript_lines(run: Path) -> list[dict]:
     return [json.loads(x) for x in (run / "transcript.jsonl").read_text().splitlines()]
+
+
+TARGET_FLAGS = ("--kubeconfig", "--context", "--cluster", "--server", "--token", "--user", "--as")
+
+
+@network
+def test_crew_claude_denies_other_clusters_and_private_files(tmp_path):
+    repo, env = crew_repo(tmp_path)
+    proc = run_crew(repo, env, "healthy-noise", "--agent", "claude", "--mode", "subagents")
+    assert proc.returncode == 0, proc.stderr
+    args = (tmp_path / "calls.log").read_text().splitlines()
+    denied = args[args.index("arg=--disallowedTools") + 1 :]
+    for flag in TARGET_FLAGS:
+        assert f"arg=Bash(kubectl *{flag}*)" in denied
+    assert "arg=Bash(kubectl * -s *)" in denied
+    home = tmp_path / "home"
+    for path in (home / ".kube", home / ".claude", home / ".copilot", repo / ".kube"):
+        assert f"arg=Read(/{path}/**)" in denied
+    assert f"arg=Read(/{repo / 'tests'}/**)" in denied
+    assert "arg=Bash(sort *-o*)" in denied
+    assert not any("yq" in a for a in args)
+
+
+@network
+def test_crew_guard_refuses_other_clusters(tmp_path):
+    repo, env = crew_repo(tmp_path)
+    proc = run_crew(repo, env, "healthy-noise", "--agent", "claude", "--mode", "single")
+    assert proc.returncode == 0, proc.stderr
+    log = (tmp_path / "calls.log").read_text()
+    assert "guard plain=0" in log
+    assert "guard context=126" in log
+    assert "guard env=126" in log
+    assert "guard server=126" in log
+    assert "kubectl get pods --context other" not in log
+
+
+def run_copilot(tmp_path, mode: str, events: list[dict]):
+    repo, env = crew_repo(tmp_path)
+    events_file = tmp_path / "fake-events.jsonl"
+    events_file.write_text("".join(json.dumps(e) + "\n" for e in events))
+    env["FAKE_EVENTS"] = str(events_file)
+    proc = run_crew(repo, env, "healthy-noise", "--agent", "copilot", "--mode", mode)
+    return repo, proc
+
+
+CLEAN_COPILOT = [
+    {"type": "session.start", "data": {}},
+    {
+        "type": "assistant.message",
+        "data": {"toolRequests": [{"name": "bash", "arguments": {"command": "kubectl get pods"}}]},
+    },
+    {"type": "assistant.message", "data": {"content": "## Root cause\n"}},
+]
+
+
+@network
+def test_crew_copilot_denies_other_clusters_and_private_files(tmp_path):
+    repo, proc = run_copilot(tmp_path, "subagents", CLEAN_COPILOT)
+    assert proc.returncode == 0, proc.stderr
+    args = (tmp_path / "calls.log").read_text().splitlines()
+    pairs = set(itertools.pairwise(args))
+    for flag in TARGET_FLAGS:
+        assert ("copilot-arg=--deny-tool", f"copilot-arg=shell(kubectl {flag}:*)") in pairs
+    for verb in ("apply", "delete", "exec", "config view", "rollout undo", "get secret"):
+        assert ("copilot-arg=--deny-tool", f"copilot-arg=shell(kubectl {verb}:*)") in pairs
+    home = tmp_path / "home"
+    for path in (home / ".kube", home / ".claude", home / ".copilot", repo / ".kube"):
+        assert ("copilot-arg=--deny-tool", f"copilot-arg=read({path}/**)") in pairs
+    assert not any(a in args for a in ("copilot-arg=shell(sort:*)", "copilot-arg=shell(yq:*)"))
+    run = repo / "runs" / "healthy-noise" / "copilot-subagents-1"
+    assert read_transcript_lines(run) == [{"agent": "boss", "command": "kubectl get pods"}]
+
+
+CONTAMINATED = [
+    [{"type": "subagent.started", "agentId": "a1", "data": {"agentName": "k8s-crew-investigator"}}],
+    [{"type": "skill.invoked", "data": {"name": "k8s-crew", "path": "/x/SKILL.md"}}],
+    [
+        {
+            "type": "assistant.message",
+            "data": {"toolRequests": [{"name": "skill", "arguments": {"skill": "k8s-crew"}}]},
+        }
+    ],
+    [
+        {
+            "type": "assistant.message",
+            "data": {"toolRequests": [{"name": "task", "arguments": {"agent_type": "explore"}}]},
+        }
+    ],
+]
+
+
+@pytest.mark.parametrize("extra", CONTAMINATED)
+def test_baseline_problems_flags_crew_use(tmp_path, extra):
+    path = tmp_path / "events.jsonl"
+    path.write_text("".join(json.dumps(e) + "\n" for e in CLEAN_COPILOT + extra))
+    assert baseline_problems("copilot", path)
+
+
+def test_baseline_problems_clean(tmp_path):
+    path = tmp_path / "events.jsonl"
+    events = [*CLEAN_COPILOT, {"type": "skill.invoked", "data": {"name": "k8s-triage"}}]
+    path.write_text("".join(json.dumps(e) + "\n" for e in events))
+    assert baseline_problems("copilot", path) == []
+
+
+def test_baseline_problems_claude(tmp_path):
+    stream = tmp_path / "stream.jsonl"
+    shutil.copy(FIXTURES / "claude-stream.jsonl", stream)  # has an Agent call
+    assert baseline_problems("claude", stream)
+
+
+@network
+def test_crew_copilot_contaminated_baseline_fails(tmp_path):
+    repo, _ = run_copilot(tmp_path, "single", CLEAN_COPILOT + CONTAMINATED[0])
+    run = repo / "runs" / "healthy-noise" / "copilot-single-1"
+    assert not (run / "transcript.jsonl").exists()
+    reason = (run / "transcript-error.txt").read_text()
+    assert "baseline" in reason and "subagent" in reason
+    result = hard_checks(run)
+    assert result["pass"] is False
+    assert "transcript unavailable" in result["tiers"][0]
+    assert "subagent" in result["tiers"][0]
+
+
+@network
+def test_crew_copilot_clean_baseline_has_transcript(tmp_path):
+    repo, proc = run_copilot(tmp_path, "single", CLEAN_COPILOT)
+    assert proc.returncode == 0, proc.stderr
+    run = repo / "runs" / "healthy-noise" / "copilot-single-1"
+    assert (run / "transcript.jsonl").exists()
+    assert not (run / "transcript-error.txt").exists()

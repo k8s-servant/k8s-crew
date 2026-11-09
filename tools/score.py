@@ -9,7 +9,7 @@ with "transcript unavailable"; a missing report fails with "report unavailable".
 
 Command line (run from the repository root)::
 
-    python -m tools.score transcript --claude|--copilot SOURCE OUT
+    python -m tools.score transcript --claude|--copilot SOURCE [--baseline] OUT
     python -m tools.score final-report --claude|--copilot SOURCE OUT
     python -m tools.score score RUN_DIR [--judge-output FILE]
     python -m tools.score summarize RUNS_ROOT
@@ -62,8 +62,10 @@ def hard_checks(run_dir: Path, checker=None) -> dict:
     run_dir = Path(run_dir)
     tiers: list[str] = []
     transcript = run_dir / "transcript.jsonl"
+    error_file = run_dir / "transcript-error.txt"
     if not transcript.is_file():
-        tiers.append(f"{UNAVAILABLE}: {transcript.name} is missing")
+        reason = error_file.read_text(encoding="utf-8").strip() if error_file.is_file() else ""
+        tiers.append(f"{UNAVAILABLE}: {reason or transcript.name + ' is missing'}")
     else:
         try:
             commands = read_transcript(transcript)
@@ -213,6 +215,43 @@ def read_copilot_events(path: Path) -> list[Command]:
     return commands
 
 
+def baseline_problems(kind: str, path: Path) -> list[str]:
+    """Signs that a single-agent baseline run used the crew; empty means a clean baseline.
+
+    A baseline must not start subagents or load the k8s-crew skill. Copilot can still see
+    the user's own agents and skills in ``~/.copilot``, so this is checked from the log.
+    """
+    problems: list[str] = []
+    if kind == "claude":
+        for event in _jsonl(path):
+            if event.get("type") != "assistant":
+                continue
+            for item in (event.get("message") or {}).get("content") or []:
+                if not isinstance(item, dict) or item.get("type") != "tool_use":
+                    continue
+                inp = item.get("input") or {}
+                if item.get("name") in ("Agent", "Task"):
+                    problems.append(f"started a subagent: {inp.get('subagent_type')}")
+                elif item.get("name") == "Skill" and inp.get("skill") == "k8s-crew":
+                    problems.append("loaded the k8s-crew skill")
+        return problems
+    for event in _copilot_events(path):
+        data = event.get("data") or {}
+        kind_ = event.get("type")
+        if kind_ in ("subagent.started", "subagent.selected"):
+            problems.append(f"started a subagent: {data.get('agentName')}")
+        elif kind_ == "skill.invoked" and data.get("name") == "k8s-crew":
+            problems.append("loaded the k8s-crew skill")
+        elif kind_ == "assistant.message":
+            for request in data.get("toolRequests") or []:
+                args = request.get("arguments") or {}
+                if request.get("name") == "task":
+                    problems.append(f"started a subagent: {args.get('agent_type')}")
+                elif request.get("name") == "skill" and args.get("skill") == "k8s-crew":
+                    problems.append("loaded the k8s-crew skill")
+    return problems
+
+
 def copilot_final_report(path: Path) -> str:
     """Return the last non-empty main-session ``assistant.message`` content."""
     for event in reversed(_copilot_events(path)):
@@ -276,6 +315,12 @@ def main(argv: list[str] | None = None) -> int:
         src = p.add_mutually_exclusive_group(required=True)
         src.add_argument("--claude", type=Path, help="claude stream-json output")
         src.add_argument("--copilot", type=Path, help="copilot session events.jsonl")
+        if name == "transcript":
+            p.add_argument(
+                "--baseline",
+                action="store_true",
+                help="single-agent run: fail if it started subagents or loaded k8s-crew",
+            )
         p.add_argument("out", type=Path)
     p = sub.add_parser("score")
     p.add_argument("run_dir", type=Path)
@@ -287,6 +332,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "transcript":
             kind, path = _source(args)
+            if args.baseline:
+                found = sorted(set(baseline_problems(kind, path)))
+                _require(not found, "not a valid single-agent baseline: " + "; ".join(found))
             commands = read_claude_stream(path) if kind == "claude" else read_copilot_events(path)
             lines = [json.dumps({"agent": c.agent, "command": c.command}) for c in commands]
             args.out.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
