@@ -83,3 +83,34 @@ def test_read_transcript(tmp_path):
         '{"agent": "a1", "command": "kubectl get ns"}\n\n{"agent": "a2", "command": "ls"}\n'
     )
     assert read_transcript(path) == [Command("a1", "kubectl get ns"), Command("a2", "ls")]
+
+
+ESCAPES = [
+    "echo $(kubectl delete pod x -n my-namespace)",
+    'bash -c "kubectl delete pod x"',
+    "xargs kubectl delete pod",
+    "sudo kubectl delete pod x",
+    "timeout 5 kubectl delete pod x",
+    "env kubectl delete pod x",
+    "(kubectl delete pod x)",
+    "{ kubectl delete pod x; }",
+    "for p in a; do kubectl delete pod $p; done",
+    "! kubectl delete pod x",
+    "echo `kubectl get secret s -o yaml`",
+]
+
+
+@network
+@pytest.mark.parametrize("line", ESCAPES)
+def test_escape_routes_fail(line):
+    assert tier_problems([Command("boss", line)], load_checker()) != []
+
+
+def test_stream_bash_without_command_raises(tmp_path):
+    path = tmp_path / "s.jsonl"
+    path.write_text(
+        '{"type":"assistant","parent_tool_use_id":null,"message":{"content":'
+        '[{"type":"tool_use","id":"t","name":"Bash","input":{}}]}}\n'
+    )
+    with pytest.raises(ValueError):
+        read_claude_stream(path)

@@ -15,6 +15,7 @@ Two transcript formats are read:
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,30 +70,15 @@ def split_command(line: str) -> list[str]:
     return _scan(line, _SEPARATORS)
 
 
-def _pipe_stages(piece: str) -> list[str]:
-    # "||" is consumed first so it is never mistaken for two pipes.
-    stages: list[str] = []
-    for part in _scan(piece, ("||",)):
-        stages.extend(_scan(part, ("|",)))
-    return stages
-
-
-def _first_word(stage: str) -> str:
-    for word in stage.split():
-        if "=" in word and not word.startswith(("-", "=")) and word.split("=")[0].isidentifier():
-            continue  # leading VAR=value assignment
-        return word.rsplit("/", 1)[-1]
-    return ""
-
-
 def is_cluster_command(piece: str, allowlist: dict) -> bool:
-    """True when any pipeline stage of the piece starts with a cluster tool."""
-    known = set(allowlist.get("commands", {})) | set(EXTRA_CLUSTER_TOOLS)
-    try:
-        stages = _pipe_stages(piece)
-    except ValueError:
-        stages = [piece]
-    return any(_first_word(stage) in known for stage in stages)
+    """True when any word in the piece names a cluster tool.
+
+    Deliberately broad: wrappers, substitutions and subshells all contain the tool name
+    as a word, so they reach the strict checker. False positives fail closed.
+    """
+    tools = sorted(set(allowlist.get("commands", {})) | set(EXTRA_CLUSTER_TOOLS))
+    pattern = r"(?<![\w./-])(?:[\w./-]*/)?(?:" + "|".join(map(re.escape, tools)) + r")(?![\w.-])"
+    return re.search(pattern, piece) is not None
 
 
 def tier_problems(commands: list[Command], checker) -> list[str]:
@@ -147,7 +133,9 @@ def read_claude_stream(path: Path) -> list[Command]:
             inp = item.get("input") or {}
             if item.get("name") in ("Agent", "Task"):
                 agent_names[item.get("id", "")] = inp.get("subagent_type") or "subagent"
-            elif item.get("name") == "Bash" and "command" in inp:
+            elif item.get("name") == "Bash":
+                if not isinstance(inp.get("command"), str):
+                    raise ValueError(f"{path}:{number}: Bash tool_use without a string command")
                 agent = "boss" if parent is None else agent_names.get(parent, "subagent")
                 commands.append(Command(agent, inp["command"]))
     return commands
