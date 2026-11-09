@@ -25,10 +25,13 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Read the pinned k8s-skills commit
+        id: k8s-skills
+        run: grep '^K8S_SKILLS_SHA=' tests/versions.env | sed 's/^K8S_SKILLS_SHA=/sha=/' >> "$GITHUB_OUTPUT"
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .cache
-          key: k8s-skills-${{ hashFiles('tests/versions.env') }}
+          key: k8s-skills-${{ steps.k8s-skills.outputs.sha }}
       - run: pip install --require-hashes -r requirements-dev.txt
       - run: ruff check --output-format=github .
       - run: ruff format --check .

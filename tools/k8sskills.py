@@ -7,6 +7,7 @@ the duration of the import and restored afterwards, so nothing of the checkout l
 
 import importlib
 import importlib.util
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -32,28 +33,66 @@ class Checker:
     commands_module: ModuleType
 
 
-def read_ref() -> str:
-    """Return K8S_SKILLS_REF from tests/versions.env."""
+def _read_pin(key: str) -> str:
     for line in VERSIONS_ENV.read_text(encoding="utf-8").splitlines():
-        key, sep, value = line.partition("=")
-        if sep and key.strip() == "K8S_SKILLS_REF":
+        name, sep, value = line.partition("=")
+        if sep and name.strip() == key:
             return value.strip()
-    raise ValueError(f"K8S_SKILLS_REF not set in {VERSIONS_ENV}")
+    raise ValueError(f"{key} not set in {VERSIONS_ENV}")
+
+
+def read_ref() -> str:
+    """Return K8S_SKILLS_REF (a readable label) from tests/versions.env."""
+    return _read_pin("K8S_SKILLS_REF")
+
+
+def read_sha() -> str:
+    """Return K8S_SKILLS_SHA, the commit that is actually trusted, from tests/versions.env."""
+    return _read_pin("K8S_SKILLS_SHA")
+
+
+def _git(*args: str, cwd: Path | None = None) -> str:
+    done = subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+    return done.stdout.strip()
+
+
+def _download(sha: str, target: Path) -> None:
+    """Fetch exactly commit ``sha`` into ``target``; no tag or branch is trusted."""
+    target.mkdir(parents=True)
+    _git("init", "--quiet", cwd=target)
+    _git("fetch", "--quiet", "--depth", "1", REPO_URL, sha, cwd=target)
+    _git("checkout", "--quiet", "--detach", "FETCH_HEAD", cwd=target)
+
+
+def _head(checkout: Path) -> str | None:
+    try:
+        return _git("rev-parse", "HEAD", cwd=checkout)
+    except (subprocess.CalledProcessError, OSError):
+        return None
 
 
 def fetch(ref: str | None = None) -> Path:
-    """Return the checkout of k8s-skills at ``ref``, cloning it (shallow) if missing."""
+    """Return the checkout of k8s-skills at the pinned commit, downloading it if needed.
+
+    The checkout is executed, so its HEAD must equal K8S_SKILLS_SHA, also when it was restored
+    from a cache. A checkout at another commit is deleted and downloaded once more.
+    ``ref`` only names the directory.
+
+    Raises:
+        RuntimeError: If the checkout is not at the pinned commit after a fresh download.
+    """
     ref = ref or read_ref()
+    sha = read_sha()
     target = CACHE_DIR / f"k8s-skills-{ref}"
-    if target.exists():
+    if target.exists() and _head(target) == sha:
         return target
+    shutil.rmtree(target, ignore_errors=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    partial = target.with_name(target.name + ".partial")
-    subprocess.run(
-        ["git", "clone", "--quiet", "--depth", "1", "--branch", ref, REPO_URL, str(partial)],
-        check=True,
-    )
-    partial.rename(target)
+    _download(sha, target)
+    actual = _head(target)
+    if actual != sha:
+        shutil.rmtree(target, ignore_errors=True)
+        raise RuntimeError(f"k8s-skills checkout is at {actual}, expected {sha}")
     return target
 
 
@@ -79,8 +118,9 @@ def _import_commands(checkout: Path) -> ModuleType:
 def load_checker(ref: str | None = None) -> Checker:
     """Load the command checker from the pinned k8s-skills checkout."""
     ref = ref or read_ref()
+    checkout = fetch(ref)  # every call re-verifies the pinned commit before anything is imported
     if ref not in _loaded:
-        commands = _import_commands(fetch(ref))
+        commands = _import_commands(checkout)
         allowlist = commands.load_allowlist()
         _loaded[ref] = Checker(
             allowlist=allowlist,
