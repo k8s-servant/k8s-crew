@@ -29,8 +29,8 @@ Start one investigator per issue with the Agent tool, `subagent_type:
 parallel, then wait for all of them. Each `prompt` is the investigator's task from
 step 2 of the recipe: the issue, object and namespace, triage's evidence, the specialist
 skill and its `SKILL.md` path if known, and "Run one plain read-only command per call
-(no chaining, redirection, variables, cd or echo; pipe only into grep, head, tail and
-the other listed filters). Reply in the shape from your instructions: Finding,
+(no chaining, redirection, variables, cd or echo; pipe only into grep, egrep, head,
+tail, sort, uniq, wc, cut, column, jq or yq). Reply in the shape from your instructions: Finding,
 Evidence, Confidence, Proposed fixes."
 
 Up to 3 investigators by default, 4 at most.

@@ -104,17 +104,19 @@ user says it is sorted.
 herdr helpers have no agent definition and no tool limits, so the prompt is their only
 instruction. It carries the hard rules and the reply shape inline, and points to the
 full role for the rest. Send it as **one line** (a line break can submit early in an
-agent's terminal), with the placeholders filled in:
+agent's terminal), with the placeholders filled in. The prompt is sent in single quotes,
+so the filled-in text must not contain a single quote, a double quote, a backtick or a
+dollar sign: write names and evidence without them.
 
 ```text
-You are a read-only k8s-crew investigator. Your kubeconfig is <boss-kubeconfig-path>; it is already set and checked in this pane. Hard rules: run only read-only (run-freely) commands; run one plain command per call: no &&, ; or ||, no redirection such as 2>&1, no $VAR or $(...), no cd and no echo, and a pipe only into grep, egrep, head, tail, sort, uniq, wc, cut, column, jq or yq; never run a command under an "Ask first" or a "Proposed fix" line, or any other command that changes the cluster; never read Secrets; do not change files. Use the skill <specialist-skill> (its SKILL.md is at <skill-path>). Your task: <issue, object and namespace, triage's evidence>. Your full instructions are in <skill-dir>/roles/investigator.md: read that file first, and if you cannot read it, say so in your reply and keep to these rules. Reply with exactly these sections, in this order: ### Finding, ### Evidence, ### Confidence (confirmed | likely | not sure), ### Proposed fixes (each fix with its command and an "# Undo:" line).
+You are a read-only k8s-crew investigator. Your kubeconfig is <boss-kubeconfig-path>; it is already set and checked in this pane. Hard rules: run only read-only (run-freely) commands; run one plain command per call: no &&, ; or ||, no redirection such as 2>&1, no shell variables or command substitution, no cd and no echo, and a pipe only into grep, egrep, head, tail, sort, uniq, wc, cut, column, jq or yq; never run a command under an Ask first or a Proposed fix line, or any other command that changes the cluster; never read Secrets; do not change files. Use the skill <specialist-skill> (its SKILL.md is at <skill-path>). Your task: <issue, object and namespace, and the evidence triage saw>. Your full instructions are in <skill-dir>/roles/investigator.md: read that file first, and if you cannot read it, say so in your reply and keep to these rules. Reply with exactly these sections, in this order: ### Finding, ### Evidence, ### Confidence (confirmed | likely | not sure), ### Proposed fixes (each fix with its command and a line that starts with # Undo: and reverses it).
 ```
 
 Send all prompts in parallel with a generous timeout:
 
 ```bash
-herdr agent prompt crew-claude "<prompt>" --wait --timeout 600000 &
-herdr agent prompt crew-copilot "<prompt>" --wait --timeout 600000 &
+herdr agent prompt crew-claude '<prompt>' --wait --timeout 600000 &
+herdr agent prompt crew-copilot '<prompt>' --wait --timeout 600000 &
 wait
 ```
 

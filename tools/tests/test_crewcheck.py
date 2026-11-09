@@ -240,8 +240,8 @@ def test_crew_line_chained_to_other_program_is_found(tmp_path):
     "needle",
     [
         "read-only",
-        '"Ask first"',
-        '"Proposed fix"',
+        "Ask first",
+        "Proposed fix",
         "never read Secrets",
         "### Finding",
         "### Evidence",
@@ -271,3 +271,30 @@ def test_agent_skills_must_be_a_list(tmp_path, line):
     repo = make_repo(tmp_path)
     edit(repo, str(AGENT), "skills: []\n", line)
     assert any(m.startswith(str(AGENT)) and "skills" in m for m in messages(repo))
+
+
+def _herdr_prompt_span(text):
+    start = text.index("```text", text.index("## 6. Hand out the tasks")) + len("```text\n")
+    return start, text.index("```", start)
+
+
+@network
+@pytest.mark.parametrize("char", ["$", "`", '"', "'"])
+def test_herdr_prompt_has_no_shell_characters(tmp_path, char):
+    repo = make_repo(tmp_path)
+    path = repo / HERDR
+    text = path.read_text(encoding="utf-8")
+    start, end = _herdr_prompt_span(text)
+    assert char not in text[start:end]
+    path.write_text(text[:start] + f"Run {char}x. " + text[start:], encoding="utf-8")
+    assert any(m.startswith(HERDR) and "must not contain" in m for m in messages(repo))
+
+
+@network
+def test_herdr_prompt_send_uses_single_quotes(tmp_path):
+    repo = make_repo(tmp_path)
+    path = repo / HERDR
+    text = path.read_text(encoding="utf-8")
+    assert "crew-claude '<prompt>'" in text
+    path.write_text(text.replace("'<prompt>'", '"<prompt>"'), encoding="utf-8")
+    assert any(m.startswith(HERDR) and "single quotes" in m for m in messages(repo))

@@ -13,6 +13,7 @@ az command written inside them is still checked.
 
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,8 +63,8 @@ REQUIRED_TEXT = {
 HERDR_PROMPT_HEADING = "## 6. Hand out the tasks"
 HERDR_PROMPT_RULES = (
     "read-only",
-    '"Ask first"',
-    '"Proposed fix"',
+    "Ask first",
+    "Proposed fix",
     "never read Secrets",
     "### Finding",
     "### Evidence",
@@ -74,6 +75,9 @@ HERDR_PROMPT_RULES = (
     "one plain command per call",
     "pipe only into grep",
 )
+# The prompt is sent as one single-quoted shell argument, so nothing in it may be shell-active.
+HERDR_PROMPT_FORBIDDEN = ("$", "`", '"', "'")
+HERDR_SEND = re.compile(r"^herdr agent prompt (\S+) (.*)$")
 
 
 @dataclass(frozen=True)
@@ -229,11 +233,35 @@ def check_herdr_prompt(text: str, checker: Checker) -> list[Finding]:
             )
         ]
     body = " ".join(prompt.lines)
-    return [
+    found = [
         Finding(HERDR_RUNNER, prompt.start_line, f"helper prompt must contain inline: {rule}")
         for rule in HERDR_PROMPT_RULES
         if rule not in body
     ]
+    found += [
+        Finding(HERDR_RUNNER, prompt.start_line, f"helper prompt must not contain: {char}")
+        for char in HERDR_PROMPT_FORBIDDEN
+        if char in body
+    ]
+    sends = [
+        (b.start_line + 1 + i, HERDR_SEND.match(line.strip()))
+        for b in blocks
+        if b.lang in ("bash", "sh", "shell")
+        for i, line in enumerate(b.lines)
+    ]
+    sends = [(n, m) for n, m in sends if m]
+    if not sends:
+        found.append(Finding(HERDR_RUNNER, None, "no herdr agent prompt example found"))
+    for line_no, match in sends:
+        if not re.match(r"'[^']*'(\s|$)", match.group(2)):
+            found.append(
+                Finding(
+                    HERDR_RUNNER,
+                    line_no,
+                    "herdr agent prompt must send the prompt in single quotes",
+                )
+            )
+    return found
 
 
 def check_skill(repo: Path, skill_file: Path) -> list[Finding]:
