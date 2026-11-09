@@ -25,6 +25,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .cache
+          key: k8s-skills-${{ hashFiles('tests/versions.env') }}
       - run: pip install --require-hashes -r requirements-dev.txt
       - run: ruff check --output-format=github .
       - run: ruff format --check .
