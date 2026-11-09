@@ -17,7 +17,7 @@ not copy its skills.
 
 ## What a run looks like
 
-```text
+````text
 > /k8s-crew users say my-app is timing out
 
 The worker node my-node-2 stopped reporting. Both CoreDNS replicas ran on it, so the
@@ -31,26 +31,34 @@ my-node-2 is NotReady: its kubelet stopped posting status (confirmed).
 - my-app in my-namespace: lookups of my-api fail, so the pod is Running but not ready.
 
 ## Separate issues
-None found.
+None.
 
 ## Fixes
-1. On my-node-2, with node access: check the kubelet (systemctl status kubelet,
-   journalctl -u kubelet) and restart it.
-2. To get DNS back before the node returns, let CoreDNS run on other nodes:
-   kubectl -n kube-system patch deployment coredns --type json \
-     -p '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]'
-   # Undo: kubectl -n kube-system patch deployment coredns --type merge \
-     -p '{"spec":{"template":{"spec":{"nodeSelector":{"kubernetes.io/hostname":"my-node-2"}}}}}'
+1. Bring the node back. This is a host action, not a cluster change: someone with
+   access to my-node-2 checks the kubelet (systemctl status kubelet,
+   journalctl -u kubelet) and restarts it.
+
+2. To get DNS back before the node returns, let CoreDNS run on other nodes.
+
+   > Ask first: the agent runs this only after the user approves it.
+
+   ```bash
+   kubectl -n kube-system patch deployment coredns --type json -p '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]'
+   # Undo: kubectl -n kube-system patch deployment coredns --type merge -p '{"spec":{"template":{"spec":{"nodeSelector":{"kubernetes.io/hostname":"my-node-2"}}}}}'
+   ```
+
+The crew did not run these. Run the ones you agree with in your own terminal.
 
 ## What was checked
 ...
 
 ## Helper details
 ...
-```
+````
 
 Shortened, with placeholder names. The report always has these six sections in this
-order, and every fix that changes the cluster has an `# Undo:` line.
+order. Every fix that changes the cluster comes with a marker line and an `# Undo:`
+line, and the crew runs none of them.
 
 ## Install
 
@@ -91,10 +99,10 @@ session. See [docs/safety.md](docs/safety.md).
 ```
 
 The plugin depends on the `k8s-skills` plugin and installs it too. It ships the
-investigator agent as `k8s-crew:k8s-crew-investigator`. The preflight still looks for
-the investigator under `~/.claude/agents`, so also run `scripts/install-agents.sh
---claude` from the plugin's `skills/k8s-crew` folder (under `~/.claude/plugins/cache/`),
-and again after each plugin update. Create the viewer kubeconfig as above.
+investigator agent as `k8s-crew:k8s-crew-investigator`, and the preflight finds it
+there, so `install-agents.sh` is not needed for Claude Code. Create the viewer
+kubeconfig as above, with `scripts/viewer-kubeconfig.sh` from the plugin's
+`skills/k8s-crew` folder (under `~/.claude/plugins/cache/`).
 
 ## Run it
 

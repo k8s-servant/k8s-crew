@@ -21,11 +21,22 @@ stuck at a trust prompt shows up as `blocked`; the boss shows you its screen and
 
 ### The investigator agent is missing
 
-`scripts/preflight.sh --subagents` exits 4 with `investigator agent missing` when it
-cannot find the investigator definition. Run `scripts/install-agents.sh` and start a new
-session. The preflight looks in `~/.claude/agents` (Claude Code), `~/.copilot/agents`
-(Copilot CLI), and in `.claude/agents` and `.github/agents` from the session's working
-folder up to the git root. Start the session in the project you installed into.
+`scripts/preflight.sh --subagents --platform claude|copilot` exits 4 with
+`investigator agent missing` when it cannot find the investigator definition. Run
+`scripts/install-agents.sh` and start a new session. Where the preflight looks, in
+order:
+
+- Claude Code: `.claude/agents/k8s-crew-investigator.md` in every folder from the
+  session's working folder up to the git root, then
+  `~/.claude/agents/k8s-crew-investigator.md`, then an installed k8s-crew Claude Code
+  plugin.
+- Copilot CLI: `~/.copilot/agents/k8s-crew-investigator.agent.md` (or `.md`), then
+  `.github/agents/` and `.claude/agents/` (each `.agent.md` or `.md`) in every folder
+  from the working folder up to the git root.
+
+Start the session in the project you installed into. The preflight prints which
+install it found (`investigator: project`, `user` or `plugin`); a plugin install is
+named `k8s-crew:k8s-crew-investigator`.
 
 The boss never falls back to a general-purpose subagent: it would lose the tool limits.
 

@@ -27,7 +27,7 @@ Make an empty project with both linked in, the same way `tests/crew.sh` does:
 ```bash
 repo="$PWD"
 skills="$(.venv/bin/python -c 'from tools.k8sskills import fetch; print(fetch())')/skills"
-project="$(mktemp -d)/project"
+project="$(cd "$(mktemp -d)" && pwd -P)/project"
 mkdir -p "$project/.claude/skills" "$project/.github"
 git -C "$project" init --quiet
 for s in "$skills"/*/; do ln -s "${s%/}" "$project/.claude/skills/$(basename "$s")"; done
