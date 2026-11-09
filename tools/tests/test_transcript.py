@@ -451,3 +451,40 @@ QUOTED_ESCAPES = [
 @pytest.mark.parametrize("line", QUOTED_ESCAPES)
 def test_unquoted_control_and_substitution_still_fail(line):
     assert tier_problems([Command("boss", line)], load_checker(), PATHS), line
+
+
+# bash reads an unquoted # at a word start as a comment, so a quote after it never
+# opens; a tokenizer that opened it would hide the next line's command. Quoting may
+# never span lines, and $[ (arithmetic) expands.
+COMMENT_AND_LINE_ESCAPES = [
+    "kubectl get pods #'\nkubectl delete pod x #'",
+    "kubectl get pods #'\rkubectl delete pod x #'",
+    "kubectl get pods #x",
+    "kubectl get pods # comment",
+    "kubectl get pods -o json | jq . #'",
+    'kubectl get pods "$[1+1]"',
+    "kubectl get pods $[1]",
+    "kubectl get pods -l 'app=my-app\nkubectl delete pod x'",
+    'kubectl get pods -l "app=my-app\nb"',
+    "kubectl get pods -o json | jq '.items[]\n| .metadata.name'",
+    "kubectl get pods\r",
+]
+
+
+@network
+@pytest.mark.parametrize("line", COMMENT_AND_LINE_ESCAPES)
+def test_comments_line_breaks_in_quotes_and_arithmetic_fail(line):
+    problems = tier_problems([Command("boss", line)], load_checker(), PATHS)
+    assert problems, line
+
+
+def test_shell_words_refuses_comments_newlines_and_arithmetic():
+    from tools.transcript import shell_words
+
+    for piece in ("kubectl get pods #x", "a 'b\nc'", 'a "b\rc"', "a $[1]", 'a "$[1]"'):
+        assert shell_words(piece) == "control", piece
+    # A literal backslash-n in a jsonpath template is not a line break.
+    assert shell_words("kubectl get pods -o jsonpath='{\"\\n\"}'") == [
+        ["kubectl", "get", "pods", "-o", 'jsonpath={"\\n"}']
+    ]
+    assert shell_words("kubectl get pods -l a#b") == [["kubectl", "get", "pods", "-l", "a#b"]]

@@ -147,7 +147,7 @@ def _scan(line: str, separators: tuple[str, ...]) -> list[str]:
     return [p.strip() for p in pieces if p.strip()]
 
 
-_EXPANDS = re.compile(r"[A-Za-z_{(0-9@*#?!$'\"-]")
+_EXPANDS = re.compile(r"[A-Za-z_{(\[0-9@*#?!$'\"-]")
 # jq builtins that read files or the environment: the pinned checker only checks jq's
 # flags and arguments, not its program.
 _JQ_READS = re.compile(
@@ -168,12 +168,17 @@ def shell_words(piece: str) -> list[list[str]] | str:
     treat as control is refused rather than interpreted: command substitution (``$(``,
     backticks, also inside double quotes), variables, ``$'...'``, unquoted ``;&<>()``,
     ``|&``, an unquoted backslash, and unquoted braces that bash would expand (with a
-    ``,`` or ``..``) or that open a group. Inside double quotes a backslash keeps its
-    literal meaning except before ``"`` and ``\\``.
+    ``,`` or ``..``) or that open a group, ``$[`` arithmetic, an unquoted ``#`` that
+    starts a word (bash reads the rest of the line as a comment, so a quote after it
+    never opens), and any line break or carriage return (quoting never spans lines
+    here). Inside double quotes a backslash keeps its literal meaning except before
+    ``"`` and ``\\``.
 
     Returns:
         The stages, or "control" or "parse" naming the problem.
     """
+    if "\n" in piece or "\r" in piece:
+        return "control"
     segments: list[list[str]] = [[]]
     word: list[str] = []
     bare: list[str] = []  # the word's unquoted characters
@@ -228,7 +233,7 @@ def shell_words(piece: str) -> list[list[str]] | str:
                     return "control"
                 flush()
                 segments.append([])
-            elif c in ";&<>()":
+            elif c in ";&<>()" or (c == "#" and not state["in_word"]):
                 return "control"
             else:
                 word.append(c)
@@ -388,6 +393,10 @@ def command_problems(
 ) -> list[str]:
     """Problems of one command line, each as ``'<piece>': <reason>``."""
     paths = paths or RunPaths()
+    if "\r" in line:
+        # bash treats a carriage return as word text, editors and terminals as a line
+        # break: the line may not read as it runs.
+        return [f"{line!r}: carriage return not allowed"]
     try:
         pieces = split_command(line)
     except ValueError as exc:
