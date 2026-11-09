@@ -71,6 +71,14 @@ def _head(checkout: Path) -> str | None:
         return None
 
 
+def _dirty(checkout: Path) -> str:
+    """Return git's report of changed, untracked or ignored files; empty if the tree is clean."""
+    try:
+        return _git("status", "--porcelain", "--untracked-files=all", "--ignored", cwd=checkout)
+    except (subprocess.CalledProcessError, OSError) as err:
+        return f"git status failed: {err}"
+
+
 def fetch(ref: str | None = None) -> Path:
     """Return the checkout of k8s-skills at the pinned commit, downloading it if needed.
 
@@ -84,15 +92,18 @@ def fetch(ref: str | None = None) -> Path:
     ref = ref or read_ref()
     sha = read_sha()
     target = CACHE_DIR / f"k8s-skills-{ref}"
-    if target.exists() and _head(target) == sha:
+    if target.exists() and _head(target) == sha and not _dirty(target):
         return target
     shutil.rmtree(target, ignore_errors=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     _download(sha, target)
     actual = _head(target)
-    if actual != sha:
+    dirty = _dirty(target)
+    if actual != sha or dirty:
         shutil.rmtree(target, ignore_errors=True)
-        raise RuntimeError(f"k8s-skills checkout is at {actual}, expected {sha}")
+        raise RuntimeError(
+            f"k8s-skills checkout is at {actual}, expected {sha}; unclean files: {dirty or 'none'}"
+        )
     return target
 
 
@@ -100,6 +111,9 @@ def _import_commands(checkout: Path) -> ModuleType:
     own = {n: m for n, m in sys.modules.items() if n == "tools" or n.startswith("tools.")}
     for name in own:
         del sys.modules[name]
+    # No __pycache__ may appear in the checkout: the next fetch() requires a clean tree.
+    no_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
     try:
         init = checkout / "tools" / "__init__.py"
         spec = importlib.util.spec_from_file_location(
@@ -110,6 +124,7 @@ def _import_commands(checkout: Path) -> ModuleType:
         spec.loader.exec_module(package)
         return importlib.import_module("tools.skillcheck.commands")
     finally:
+        sys.dont_write_bytecode = no_bytecode
         for name in [n for n in sys.modules if n == "tools" or n.startswith("tools.")]:
             del sys.modules[name]
         sys.modules.update(own)

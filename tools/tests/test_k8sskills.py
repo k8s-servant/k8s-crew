@@ -92,6 +92,23 @@ def test_fetch_replaces_a_checkout_at_the_wrong_commit(origin, tmp_path):
     assert (path / "f.txt").exists()
 
 
+def test_fetch_replaces_a_checkout_with_modified_files(origin):
+    path = k8sskills.fetch("vtest")
+    (path / "f.txt").write_text("tampered")
+    (path / "extra.py").write_text("raise SystemExit")
+    again = k8sskills.fetch("vtest")
+    assert (again / "f.txt").read_text() == "x"
+    assert not (again / "extra.py").exists()
+    assert k8sskills._dirty(again) == ""
+
+
+def test_fetch_replaces_a_checkout_with_ignored_files(origin):
+    path = k8sskills.fetch("vtest")
+    (path / ".git" / "info" / "exclude").write_text("*.pyc\n")
+    (path / "hidden.pyc").write_text("x")
+    assert not (k8sskills.fetch("vtest") / "hidden.pyc").exists()
+
+
 def test_fetch_rejects_wrong_commit(origin, tmp_path, monkeypatch):
     def download_wrong_commit(sha, target):
         target.mkdir(parents=True)
