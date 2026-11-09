@@ -44,6 +44,36 @@ _COPILOT_SHELL_TOOLS = {
     "write_bash": "input",
     "write_powershell": "input",
 }
+# Copilot CLI tools whose arguments are not shell text (seen in Copilot CLI 1.0.x
+# session logs). Any tool in neither list fails the transcript: a new or renamed shell
+# tool must not drop its commands from the hard check.
+_COPILOT_OTHER_TOOLS = frozenset(
+    {
+        "view",
+        "grep",
+        "glob",
+        "task",
+        "skill",
+        "report_intent",
+        "read_bash",
+        "stop_bash",
+        "list_bash",
+        "read_powershell",
+        "stop_powershell",
+        "list_powershell",
+        "ask_user",
+        "create",
+        "edit",
+        "apply_patch",
+        "str_replace_editor",
+        "update_todo",
+        "sql",
+        "exit_plan_mode",
+        "task_complete",
+        "web_fetch",
+        "fetch_copilot_cli_documentation",
+    }
+)
 _FENCED = re.compile(r"\A```(?:json)?\s*\n(.*)\n```\s*\Z", re.DOTALL)
 
 
@@ -189,7 +219,8 @@ def read_copilot_events(path: Path) -> list[Command]:
     """Read shell commands from a Copilot CLI session event log (``events.jsonl``).
 
     Every ``assistant.message`` lists the tool calls the model asked for in
-    ``data.toolRequests`` (asked-for, so denied attempts are included). A subagent's
+    ``data.toolRequests`` (asked-for, so denied attempts are included). A tool that is
+    neither a known shell tool nor a known non-shell tool fails closed. A subagent's
     events carry a top-level ``agentId``; its ``subagent.started`` event names it in
     ``data.agentName``. Main-session commands get the agent name ``"boss"``.
     """
@@ -203,8 +234,10 @@ def read_copilot_events(path: Path) -> list[Command]:
         if event.get("type") != "assistant.message":
             continue
         for request in data.get("toolRequests") or []:
-            key = _COPILOT_SHELL_TOOLS.get(request.get("name"))
+            name = request.get("name")
+            key = _COPILOT_SHELL_TOOLS.get(name)
             if key is None:
+                _require(name in _COPILOT_OTHER_TOOLS, f"{path}: unknown tool {name!r}")
                 continue
             text = (request.get("arguments") or {}).get(key)
             _require(

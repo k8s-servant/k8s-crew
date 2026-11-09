@@ -14,6 +14,7 @@ from tools.score import (
     copilot_final_report,
     hard_checks,
     judge_from_envelope,
+    main,
     parse_judge,
     read_copilot_events,
     summarize,
@@ -250,6 +251,61 @@ def test_read_copilot_events(tmp_path):
         Command("k8s-crew-investigator", "kubectl get pods -A"),
         Command("k8s-crew-investigator", "kubectl ls"),
     ]
+
+
+def copilot_requests(tmp_path: Path, requests: list[dict]) -> Path:
+    events = [
+        {"type": "session.start", "data": {}},
+        {"type": "assistant.message", "data": {"content": "", "toolRequests": requests}},
+    ]
+    path = tmp_path / "events.jsonl"
+    path.write_text("".join(json.dumps(e) + "\n" for e in events))
+    return path
+
+
+@pytest.mark.parametrize("name", ["run_shell", "bash_v2", "github-mcp-server-run", None])
+def test_read_copilot_events_fails_on_unknown_tool(tmp_path, name):
+    path = copilot_requests(
+        tmp_path,
+        [
+            {"name": "bash", "arguments": {"command": "kubectl get nodes"}},
+            {"name": name, "arguments": {"command": "kubectl delete pod x"}},
+        ],
+    )
+    with pytest.raises(ValueError, match="unknown tool"):
+        read_copilot_events(path)
+
+
+def test_copilot_transcript_command_fails_on_unknown_tool(tmp_path):
+    path = copilot_requests(tmp_path, [{"name": "shell2", "arguments": {"cmd": "ls"}}])
+    out = tmp_path / "transcript.jsonl"
+    assert main(["transcript", "--copilot", str(path), str(out)]) == 2
+    assert not out.exists()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "view",
+        "grep",
+        "glob",
+        "task",
+        "skill",
+        "report_intent",
+        "read_bash",
+        "stop_bash",
+        "ask_user",
+    ],
+)
+def test_read_copilot_events_skips_known_non_shell_tools(tmp_path, name):
+    path = copilot_requests(
+        tmp_path,
+        [
+            {"name": name, "arguments": {"path": "SKILL.md"}},
+            {"name": "bash", "arguments": {"command": "kubectl get nodes"}},
+        ],
+    )
+    assert read_copilot_events(path) == [Command("boss", "kubectl get nodes")]
 
 
 def test_read_copilot_events_rejects_other_files(tmp_path):
