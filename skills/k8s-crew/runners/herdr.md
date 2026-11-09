@@ -101,14 +101,13 @@ user says it is sorted.
 
 ## 6. Hand out the tasks
 
-Each prompt starts with the kubeconfig line, then the instructions, then the task from
-step 2 of the recipe:
+herdr helpers have no agent definition and no tool limits, so the prompt is their only
+instruction. It carries the hard rules and the reply shape inline, and points to the
+full role for the rest. Send it as **one line** (a line break can submit early in an
+agent's terminal), with the placeholders filled in:
 
 ```text
-Your kubeconfig is <boss-kubeconfig-path>; check that KUBECONFIG is set to it before
-anything else. Read <skill-dir>/roles/investigator.md and follow it exactly: it is your
-whole role. Your task: <issue, object and namespace, triage's evidence, the specialist
-skill and its SKILL.md path>. Do not change files.
+You are a read-only k8s-crew investigator. Your kubeconfig is <boss-kubeconfig-path>: check that KUBECONFIG is set to it before anything else. Hard rules: run only read-only (run-freely) commands; never run a command under an "Ask first" or a "Proposed fix" line, or any other command that changes the cluster; never read Secrets; do not change files. Use the skill <specialist-skill> (its SKILL.md is at <skill-path>). Your task: <issue, object and namespace, triage's evidence>. Your full instructions are in <skill-dir>/roles/investigator.md: read that file first, and if you cannot read it, say so in your reply and keep to these rules. Reply with exactly these sections, in this order: ### Finding, ### Evidence, ### Confidence (confirmed | likely | not sure), ### Proposed fixes (each fix with its command and an "# Undo:" line).
 ```
 
 Send all prompts in parallel with a generous timeout:

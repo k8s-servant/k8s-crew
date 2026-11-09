@@ -58,6 +58,20 @@ REQUIRED_TEXT = {
         ("export KUBECONFIG=", "must set the viewer identity with export KUBECONFIG= per pane"),
     ),
 }
+# herdr helpers have no agent definition, so their prompt must carry the hard rules itself.
+HERDR_PROMPT_HEADING = "## 6. Hand out the tasks"
+HERDR_PROMPT_RULES = (
+    "read-only",
+    '"Ask first"',
+    '"Proposed fix"',
+    "never read Secrets",
+    "### Finding",
+    "### Evidence",
+    "### Confidence (confirmed | likely | not sure)",
+    "### Proposed fixes",
+    "roles/investigator.md",
+    "if you cannot read",
+)
 
 
 @dataclass(frozen=True)
@@ -200,6 +214,26 @@ def _headings_in_order(rel: Path, text: str, headings: tuple[str, ...], what: st
     return found
 
 
+def check_herdr_prompt(text: str, checker: Checker) -> list[Finding]:
+    """The helper prompt template (first text block under the heading) has the hard rules."""
+    lines = text.split("\n")
+    heading = next((i + 1 for i, ln in enumerate(lines) if ln.strip() == HERDR_PROMPT_HEADING), 0)
+    blocks = checker.commands_module.extract_blocks(text)
+    prompt = next((b for b in blocks if b.start_line > heading and b.lang == "text"), None)
+    if not heading or prompt is None:
+        return [
+            Finding(
+                HERDR_RUNNER, None, f"helper prompt template missing under {HERDR_PROMPT_HEADING}"
+            )
+        ]
+    body = " ".join(prompt.lines)
+    return [
+        Finding(HERDR_RUNNER, prompt.start_line, f"helper prompt must contain inline: {rule}")
+        for rule in HERDR_PROMPT_RULES
+        if rule not in body
+    ]
+
+
 def check_skill(repo: Path, skill_file: Path) -> list[Finding]:
     """Frontmatter both Claude Code and Copilot CLI accept."""
     rel = skill_file.relative_to(repo)
@@ -296,6 +330,8 @@ def collect(repo: Path, checker: Checker | None = None) -> list[Finding]:
         if (repo / rel).is_file():
             text = (repo / rel).read_text(encoding="utf-8")
             found += [Finding(rel, None, msg) for needle, msg in rules if needle not in text]
+    if (repo / HERDR_RUNNER).is_file():
+        found += check_herdr_prompt((repo / HERDR_RUNNER).read_text(encoding="utf-8"), checker)
     found += check_agent(repo)
     if (repo / AGENT).is_file():
         markdown(repo / AGENT, body_only=True)

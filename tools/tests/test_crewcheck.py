@@ -233,3 +233,31 @@ def test_crew_line_chained_to_other_program_is_found(tmp_path):
         encoding="utf-8",
     )
     assert any(m.startswith(f"{HERDR}:") and "rm" in m for m in messages(repo))
+
+
+@network
+@pytest.mark.parametrize(
+    "needle",
+    [
+        "read-only",
+        '"Ask first"',
+        '"Proposed fix"',
+        "never read Secrets",
+        "### Finding",
+        "### Evidence",
+        "### Confidence (confirmed | likely | not sure)",
+        "### Proposed fixes",
+        "roles/investigator.md",
+        "if you cannot read",
+    ],
+)
+def test_herdr_prompt_has_hard_rules_inline(tmp_path, needle):
+    repo = make_repo(tmp_path)
+    path = repo / HERDR
+    text = path.read_text(encoding="utf-8")
+    start = text.index("```text", text.index("## 6. Hand out the tasks")) + len("```text")
+    prompt_end = text.index("```", start)
+    prompt = text[start:prompt_end]
+    assert needle in prompt
+    path.write_text(text[:start] + prompt.replace(needle, "") + text[prompt_end:], encoding="utf-8")
+    assert any(m.startswith(HERDR) and "helper prompt" in m for m in messages(repo))
