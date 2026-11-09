@@ -83,7 +83,9 @@ herdr pane wait-output <pane> --match "viewer ok" --timeout 30000
 ```
 
 The first command replaces the pane's shell with a bash that has the guard first on
-`PATH`, `KUBECONFIG` set to the viewer file and no startup files. Start an agent in the
+`PATH`, `KUBECONFIG` set to the viewer file and no startup files. Run it exactly in this
+form: `crew-start.sh` refuses arguments after `shell`, and the test kit's hard check
+fails any other use of it. Start an agent in the
 pane only after `viewer ok` appears. If it does not, read the pane with
 `herdr pane read <pane>`, do not start a helper there, and tell the user what the
 preflight said.
@@ -96,6 +98,9 @@ Start them one call each; each call returns when its helper is ready:
 herdr agent start crew-claude --kind claude --pane <pane> --timeout 60000 -- --permission-mode default --settings <skill-dir>/config/claude-settings.example.json
 herdr agent start crew-copilot --kind copilot --pane <pane> --timeout 60000 -- <copilot-rule-arguments>
 ```
+
+Use exactly these helper arguments, nothing more: the hard check fails a helper started
+with any other.
 
 - **Claude helpers** start with `--permission-mode default` and the crew's deny rules
   (`--settings <skill-dir>/config/claude-settings.example.json`), the same rules

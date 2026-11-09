@@ -7,7 +7,8 @@
 #
 #   kubectl-guard install <bin-dir> <viewer-kubeconfig>
 #       Copy this guard to <bin-dir>/kubectl and record, beside it, the viewer
-#       kubeconfig (an absolute path to one file) and the real kubectl (the first
+#       kubeconfig (an absolute path to one file that holds only the crew-viewer token,
+#       as scripts/viewer-kubeconfig.sh writes it) and the real kubectl (the first
 #       kubectl on PATH that is not a guard). scripts/crew-start.sh does this for you.
 #
 #   <bin-dir>/kubectl [kubectl arguments]
@@ -60,6 +61,18 @@ find_real() {
   return 1
 }
 
+# True when $1 looks like what scripts/viewer-kubeconfig.sh writes: one user, named
+# crew-viewer, holding a token, and no other way to authenticate. Stops a launcher or
+# agent from pointing the guard at an admin kubeconfig (--viewer ~/.kube/config).
+is_viewer() {
+  local file="$1"
+  grep -qx -- '- name: crew-viewer' "$file" &&
+    grep -qE '^    token: [^[:space:]]+$' "$file" &&
+    [[ "$(grep -cx '  user:' "$file")" == 1 ]] &&
+    ! grep -qE 'client-key|client-certificate|exec:|auth-provider|tokenFile|username:|password:' \
+      "$file"
+}
+
 install_guard() {
   local bin="${1:-}" viewer="${2:-}" real
   [[ $# -eq 2 && -d "$bin" ]] || usage
@@ -69,6 +82,11 @@ install_guard() {
   fi
   [[ -f "$viewer" && -r "$viewer" ]] || {
     echo "kubectl-guard: no viewer kubeconfig at $viewer" >&2
+    exit 2
+  }
+  is_viewer "$viewer" || {
+    echo "kubectl-guard: $viewer is not a crew viewer kubeconfig (one user crew-viewer" \
+      "with a token, as scripts/viewer-kubeconfig.sh writes it)" >&2
     exit 2
   }
   bin="$(cd "$bin" && pwd -P)"

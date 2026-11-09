@@ -14,6 +14,26 @@ ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / "skills" / "k8s-crew"
 SCRIPTS = SKILL / "scripts"
 
+# What scripts/viewer-kubeconfig.sh writes (token value replaced).
+VIEWER_KUBECONFIG = """apiVersion: v1
+kind: Config
+clusters:
+- name: k8s-crew
+  cluster:
+    server: https://127.0.0.1:6443
+    certificate-authority-data: RkFLRS1DQQ==
+users:
+- name: crew-viewer
+  user:
+    token: fake-token-value
+contexts:
+- name: k8s-crew
+  context:
+    cluster: k8s-crew
+    user: crew-viewer
+current-context: k8s-crew
+"""
+
 FAKE_KUBECTL = """#!/usr/bin/env bash
 echo "kubectl $*" >> "$FAKE_LOG"
 case "$1 $2" in
@@ -28,7 +48,7 @@ case "$1 $2" in
   "get namespaces")
     if [[ -n "${FAKE_NS_ERR:-}" ]]; then echo "$FAKE_NS_ERR" >&2; exit 1; fi
     echo "${FAKE_NAMESPACES-default my-namespace}" ;;
-  "create token") echo "fake-token-value" ;;
+  "create token") echo "${FAKE_TOKEN-fake-token-value}" ;;
   "config view")
     case "$*" in
       *--flatten*) ;;
@@ -68,7 +88,7 @@ def make_env(tmp_path, can_i="no", guard=True):
     env.pop("K8S_CREW_GUARD", None)
     if guard:
         viewer = tmp_path / "viewer.kubeconfig"
-        viewer.write_text("fake viewer")
+        viewer.write_text(VIEWER_KUBECONFIG)
         guard_bin = tmp_path / "guard"
         guard_bin.mkdir(exist_ok=True)
         subprocess.run(
@@ -499,3 +519,10 @@ def test_preflight_ignores_plugin_checkout_outside_claude_plugins(tmp_path):
     args = ["bash", str(script), "--subagents", "--platform", "claude"]
     res = subprocess.run(args, capture_output=True, text=True, env=env, cwd=work, check=False)
     assert res.returncode == 4, res.stdout
+
+
+def test_viewer_kubeconfig_refuses_an_empty_token(tmp_path):
+    res, out = viewer_kubeconfig(tmp_path, FAKE_TOKEN="")
+    assert res.returncode == 3
+    assert "no token" in res.stderr
+    assert not out.exists()

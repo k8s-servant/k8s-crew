@@ -2,7 +2,7 @@
 # Start a k8s-crew session that can only use the crew viewer kubeconfig.
 #
 #   crew-start.sh [--viewer PATH] [--auto-allow] claude|copilot [agent arguments...]
-#   crew-start.sh [--viewer PATH] shell [bash arguments...]
+#   crew-start.sh [--viewer PATH] shell
 #
 # Setting KUBECONFIG alone does not take your admin kubeconfig away: ~/.kube/config is
 # still on disk, and `kubectl --kubeconfig ~/.kube/config ...` or `--context <admin>`
@@ -18,11 +18,16 @@
 #    - claude:  --settings config/claude-settings.example.json (kubectl writes, Secret
 #      reads, the target flags, kubectl by full path, reading kubeconfig and agent
 #      credential files). With --auto-allow, also --allowedTools for the read-only
-#      kubectl commands, the pipe filters and the preflight, so those run without asking.
+#      kubectl commands and the preflight, so those run without asking. The pipe filters
+#      are not auto-allowed: Claude Code matches each pipe stage as its own command, so
+#      a rule cannot say "only after a pipe", and Bash(grep *) would also let
+#      `grep -r client-key-data ~` read credentials without a prompt. A pipe into a
+#      filter asks first.
 #    - copilot: config/copilot-deny-tools.sh --run (the same rules, as Copilot can
 #      express them). With --auto-allow, kubectl runs without asking.
 #    - shell:   an interactive bash with the same PATH and KUBECONFIG and no startup
 #      files, for a herdr helper pane; `herdr agent start` then runs the agent in it.
+#      It takes no arguments: `shell -c <text>` would run anything.
 #
 # --viewer defaults to ~/.kube/k8s-crew-viewer, written by scripts/viewer-kubeconfig.sh.
 # Use --auto-allow only through this launcher: it is safe only because the guard and
@@ -37,7 +42,7 @@ skill_dir="$(cd "$here/.." && pwd)"
 
 usage() {
   echo "usage: crew-start.sh [--viewer PATH] [--auto-allow] claude|copilot [agent arguments...]" >&2
-  echo "       crew-start.sh [--viewer PATH] shell [bash arguments...]" >&2
+  echo "       crew-start.sh [--viewer PATH] shell" >&2
   exit 2
 }
 
@@ -74,13 +79,12 @@ export PATH="$bin:$PATH"
 export KUBECONFIG="$viewer"
 export K8S_CREW_GUARD="$bin"
 
-# Read-only kubectl commands and pipe filters that --auto-allow lets run without asking
-# (the same run-freely list as recipes/triage.md).
+# Read-only kubectl commands that --auto-allow lets run without asking (the run-freely
+# list of recipes/triage.md).
 read_verbs=(
   get describe logs events top explain api-resources api-versions version cluster-info
   "auth can-i" "auth whoami" "rollout status" "rollout history"
 )
-filters=(grep egrep head tail sort uniq wc cut column jq)
 
 case "$kind" in
   claude)
@@ -90,7 +94,6 @@ case "$kind" in
       for verb in "${read_verbs[@]}"; do
         args+=("Bash(kubectl $verb)" "Bash(kubectl $verb *)")
       done
-      for tool in "${filters[@]}"; do args+=("Bash($tool *)"); done
       for path in "$here/preflight.sh" "$(cd "$here" && pwd -P)/preflight.sh"; do
         args+=("Bash($path)" "Bash($path *)")
       done
@@ -105,8 +108,7 @@ case "$kind" in
     exec "${deny[@]}" --run "$@"
     ;;
   shell)
-    [[ "$auto_allow" == false ]] || usage
-    [[ $# -gt 0 ]] || set -- -i
-    exec bash --noprofile --norc "$@"
+    [[ "$auto_allow" == false && $# -eq 0 ]] || usage
+    exec bash --noprofile --norc -i
     ;;
 esac

@@ -43,6 +43,10 @@ fi
 
 kubectl apply -f "$here/../rbac/crew-viewer.yaml" >&2
 token="$(kubectl create token crew-viewer -n k8s-crew --duration 8h)"
+if [[ -z "$token" ]]; then
+  echo "viewer-kubeconfig.sh: kubectl create token returned no token" >&2
+  exit 3
+fi
 
 mkdir -p "$(dirname "$out")"
 umask 077

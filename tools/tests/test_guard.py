@@ -13,6 +13,26 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / "skills" / "k8s-crew"
 GUARD = SKILL / "scripts" / "kubectl-guard"
+
+# What scripts/viewer-kubeconfig.sh writes (token value replaced).
+VIEWER_KUBECONFIG = """apiVersion: v1
+kind: Config
+clusters:
+- name: k8s-crew
+  cluster:
+    server: https://127.0.0.1:6443
+    certificate-authority-data: RkFLRS1DQQ==
+users:
+- name: crew-viewer
+  user:
+    token: fake-token-value
+contexts:
+- name: k8s-crew
+  context:
+    cluster: k8s-crew
+    user: crew-viewer
+current-context: k8s-crew
+"""
 START = SKILL / "scripts" / "crew-start.sh"
 
 FAKE_KUBECTL = """#!/usr/bin/env bash
@@ -42,7 +62,7 @@ def env(tmp_path):
         (bindir / name).chmod(0o755)
     home = tmp_path / "home"
     (home / ".kube").mkdir(parents=True)
-    (home / ".kube" / "k8s-crew-viewer").write_text("fake viewer")
+    (home / ".kube" / "k8s-crew-viewer").write_text(VIEWER_KUBECONFIG)
     (tmp_path / "tmp").mkdir()
     result = dict(os.environ)
     result.update(
@@ -59,7 +79,7 @@ def env(tmp_path):
 def install(tmp_path, env, viewer=None):
     """Install the guard into tmp_path/guard; return (bin dir, viewer path, env for it)."""
     viewer = viewer or tmp_path / "viewer.kubeconfig"
-    viewer.write_text("fake viewer")
+    viewer.write_text(VIEWER_KUBECONFIG)
     bindir = tmp_path / "guard"
     bindir.mkdir()
     res = subprocess.run(
@@ -230,6 +250,10 @@ def test_start_claude_auto_allow_allows_read_verbs_only(tmp_path, env):
     assert "Bash(kubectl auth can-i *)" in allowed
     assert not any(verb in rule for rule in allowed for verb in ("delete", "apply", "exec"))
     assert any(rule.endswith("/scripts/preflight.sh *)") for rule in allowed)
+    # A Claude rule matches each pipe stage as its own command, so Bash(grep *) would also
+    # let grep -r client-key-data ~ run without a prompt: filters are never auto-allowed.
+    for tool in ("grep", "egrep", "head", "tail", "sort", "uniq", "wc", "cut", "column", "jq"):
+        assert not any(rule.startswith(f"Bash({tool}") for rule in allowed), tool
 
 
 def test_start_copilot_gets_deny_rules(tmp_path, env):
@@ -289,14 +313,67 @@ def test_copilot_auto_allow_refused_without_launcher(tmp_path, env):
 
 
 def test_start_shell_for_herdr_panes(tmp_path, env):
-    res = start(
-        env, "shell", "-c", "printenv KUBECONFIG; command -v kubectl; kubectl --context x get pods"
+    script = "printenv KUBECONFIG\ncommand -v kubectl\nkubectl --context x get pods\necho rc=$?\n"
+    res = subprocess.run(
+        ["bash", str(START), "shell"],
+        env=env,
+        input=script,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     viewer = (Path(env["HOME"]) / ".kube" / "k8s-crew-viewer").resolve()
     out = res.stdout.splitlines()
     assert out[0] == str(viewer)
     assert out[1].endswith("/kubectl") and "k8s-crew-guard." in out[1]
-    assert res.returncode == 126
+    assert "rc=126" in out
+
+
+@pytest.mark.parametrize(
+    "extra", [["-c", "docker ps"], ["--rcfile", "/tmp/rc"], ["-i"], ["--login"]]
+)
+def test_start_shell_takes_no_arguments(tmp_path, env, extra):
+    """shell is for herdr panes only; passing bash arguments would run anything."""
+    res = start(env, "shell", *extra)
+    assert res.returncode == 2
+    assert "usage" in res.stderr
+
+
+ADMIN_LIKE = [
+    VIEWER_KUBECONFIG.replace("    token: fake-token-value", "    client-key-data: QUJD"),
+    VIEWER_KUBECONFIG.replace("    token: fake-token-value", "    exec:\n      command: az"),
+    VIEWER_KUBECONFIG.replace("- name: crew-viewer\n", "- name: admin\n"),
+    VIEWER_KUBECONFIG + "- name: admin\n  user:\n    token: other\n",
+    VIEWER_KUBECONFIG.replace("    token: fake-token-value", "    tokenFile: /tmp/t"),
+    "not a kubeconfig\n",
+]
+
+
+@pytest.mark.parametrize("text", ADMIN_LIKE)
+def test_start_refuses_a_kubeconfig_that_is_not_the_crew_viewer(tmp_path, env, text):
+    other = tmp_path / "admin.kubeconfig"
+    other.write_text(text)
+    res = start(env, "--viewer", str(other), "claude")
+    assert res.returncode == 2
+    assert "not a crew viewer kubeconfig" in res.stderr
+    assert "agent=" not in log(tmp_path)
+
+
+@pytest.mark.parametrize("text", ADMIN_LIKE)
+def test_guard_install_refuses_non_viewer(tmp_path, env, text):
+    other = tmp_path / "admin.kubeconfig"
+    other.write_text(text)
+    bindir = tmp_path / "guard"
+    bindir.mkdir()
+    res = subprocess.run(
+        ["bash", str(GUARD), "install", str(bindir), str(other)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res.returncode == 2
+    assert not (bindir / "kubectl").exists()
 
 
 SETTINGS = SKILL / "config" / "claude-settings.example.json"

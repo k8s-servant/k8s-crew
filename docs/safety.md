@@ -33,6 +33,9 @@ write from any agent in the session, not only from the boss.
 on disk, and a cloud CLI login can mint a new one. `scripts/crew-start.sh` holds the
 session to the viewer:
 
+- It refuses a `--viewer` file that is not a crew viewer kubeconfig: it must hold one
+  user, `crew-viewer`, with a token and nothing else to authenticate with, as
+  `scripts/viewer-kubeconfig.sh` writes it. So `--viewer ~/.kube/config` does not work.
 - It installs `scripts/kubectl-guard` as `kubectl` in a private temp folder first on
   `PATH`. The guard runs the real kubectl only when `KUBECONFIG` is exactly the viewer
   file (not a list), and refuses `--kubeconfig`, `--context`, `--cluster`, `--server`
@@ -47,7 +50,8 @@ session to the viewer:
 
 In herdr mode each helper is its own agent in its own pane. A new herdr pane does not
 inherit the boss's shell environment, so the boss runs
-`scripts/crew-start.sh --viewer <path> shell` in every helper pane (a bash with the
+`scripts/crew-start.sh --viewer <path> shell` in every helper pane (a bash, with no
+arguments allowed, with the
 guard and the viewer `KUBECONFIG`), runs the preflight there, and only then starts the
 helper, Claude helpers with the same deny settings.
 
@@ -202,8 +206,11 @@ The command rules catch common mistakes. They are not a lock:
   subcommand gets past the subcommand deny list, and the guard and the viewer identity
   protect the cluster. It is acceptable only under the launcher: `copilot-deny-tools.sh`
   refuses `--auto-allow` unless the guard is active. `crew-start.sh --auto-allow claude`
-  allows the read-only kubectl commands, the pipe filters and the preflight in the same
-  way.
+  allows the read-only kubectl commands and the preflight in the same way, but not the
+  pipe filters: Claude Code matches each stage of a pipe as its own command, so a rule
+  cannot allow `grep` only after a pipe, and `Bash(grep *)` would also let
+  `grep -r client-key-data ~` read credentials without a prompt. A pipe into a filter
+  asks first.
 - Claude Code permission rules also match command text; a command written in an
   unusual form can slip past them.
 - Plugin agents ignore `permissionMode`. When the investigator comes from the

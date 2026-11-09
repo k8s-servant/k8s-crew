@@ -326,6 +326,7 @@ FAKE_KUBECTL = """#!/usr/bin/env bash
 echo "kubectl $*" >> "$FAKE_LOG"
 case "$1 $2" in
   "config current-context") echo "${FAKE_CONTEXT:-}" ;;
+  "create token") echo "fake-token-value" ;;
   "config view")
     case "$*" in
       *cluster.server*) echo "https://127.0.0.1:6443" ;;
