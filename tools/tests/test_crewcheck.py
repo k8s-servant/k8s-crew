@@ -15,8 +15,12 @@ import pytest
 from tools.crewcheck import collect, run_check, write_agent
 
 ROOT = Path(__file__).resolve().parents[2]
-CREW_DIRS = ("skills", "recipes", "roles", "runners", "agents", "config")
-AGENT = Path("agents/k8s-crew-investigator.md")
+SKILL = "skills/k8s-crew"
+AGENT = Path(SKILL) / "agents" / "k8s-crew-investigator.md"
+RECIPE = f"{SKILL}/recipes/triage.md"
+ROLE = f"{SKILL}/roles/investigator.md"
+HERDR = f"{SKILL}/runners/herdr.md"
+CONFIG = ROOT / SKILL / "config"
 
 network = pytest.mark.skipif(os.environ.get("K8S_CREW_OFFLINE") == "1", reason="K8S_CREW_OFFLINE=1")
 
@@ -46,8 +50,7 @@ WRITE_VERBS = [
 
 def make_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
-    for name in CREW_DIRS:
-        shutil.copytree(ROOT / name, repo / name)
+    shutil.copytree(ROOT / SKILL, repo / SKILL)
     return repo
 
 
@@ -70,19 +73,19 @@ def test_copied_repo_is_clean(tmp_path):
 @network
 def test_commands_in_markdown_are_run_freely(tmp_path):
     repo = make_repo(tmp_path)
-    path = repo / "recipes" / "triage.md"
+    path = repo / RECIPE
     path.write_text(
         path.read_text(encoding="utf-8") + "\n```bash\nkubectl delete pod x\n```\n",
         encoding="utf-8",
     )
     found = messages(repo)
-    assert any(m.startswith("recipes/triage.md:") and "kubectl delete" in m for m in found)
+    assert any(m.startswith(f"{RECIPE}:") and "kubectl delete" in m for m in found)
 
 
 @network
 def test_ask_first_block_is_allowed(tmp_path):
     repo = make_repo(tmp_path)
-    path = repo / "recipes" / "triage.md"
+    path = repo / RECIPE
     path.write_text(
         path.read_text(encoding="utf-8")
         + "\n> Ask first: the agent runs this only after the user approves it.\n\n"
@@ -95,43 +98,39 @@ def test_ask_first_block_is_allowed(tmp_path):
 @network
 def test_crew_tool_line_with_embedded_write_is_found(tmp_path):
     repo = make_repo(tmp_path)
-    path = repo / "runners" / "herdr.md"
+    path = repo / HERDR
     path.write_text(
         path.read_text(encoding="utf-8")
         + '\n```bash\nherdr pane run my-pane "kubectl delete pod x"\n```\n',
         encoding="utf-8",
     )
-    assert any(m.startswith("runners/herdr.md:") for m in messages(repo))
+    assert any(m.startswith(f"{HERDR}:") for m in messages(repo))
 
 
 @network
 def test_secret_in_prose_command_is_found(tmp_path):
     repo = make_repo(tmp_path)
-    path = repo / "roles" / "investigator.md"
+    path = repo / ROLE
     path.write_text(
         path.read_text(encoding="utf-8") + "\nRun `kubectl get secrets -A` first.\n",
         encoding="utf-8",
     )
-    assert any("Secret" in m and m.startswith("roles/investigator.md:") for m in messages(repo))
+    assert any("Secret" in m and m.startswith(f"{ROLE}:") for m in messages(repo))
 
 
 @network
 def test_report_headings_in_recipe_match(tmp_path):
     repo = make_repo(tmp_path)
-    edit(repo, "recipes/triage.md", "## Separate issues", "## Other issues")
-    assert any(
-        m.startswith("recipes/triage.md") and "## Separate issues" in m for m in messages(repo)
-    )
+    edit(repo, RECIPE, "## Separate issues", "## Other issues")
+    assert any(m.startswith(RECIPE) and "## Separate issues" in m for m in messages(repo))
 
 
 @network
 def test_finding_headings_in_role_match(tmp_path):
     repo = make_repo(tmp_path)
-    edit(repo, "roles/investigator.md", "### Confidence", "### Certainty")
+    edit(repo, ROLE, "### Confidence", "### Certainty")
     write_agent(repo)
-    assert any(
-        m.startswith("roles/investigator.md") and "### Confidence" in m for m in messages(repo)
-    )
+    assert any(m.startswith(ROLE) and "### Confidence" in m for m in messages(repo))
 
 
 @network
@@ -162,27 +161,23 @@ def test_agent_body_matches_role(tmp_path):
 @network
 def test_herdr_runner_forbids_resend(tmp_path):
     repo = make_repo(tmp_path)
-    path = repo / "runners" / "herdr.md"
+    path = repo / HERDR
     path.write_text(
         path.read_text(encoding="utf-8").replace("agent_prompt_stalled", "stalled"),
         encoding="utf-8",
     )
-    assert any(
-        m.startswith("runners/herdr.md") and "agent_prompt_stalled" in m for m in messages(repo)
-    )
+    assert any(m.startswith(HERDR) and "agent_prompt_stalled" in m for m in messages(repo))
 
 
 @network
 def test_herdr_runner_sets_viewer_kubeconfig(tmp_path):
     repo = make_repo(tmp_path)
-    path = repo / "runners" / "herdr.md"
+    path = repo / HERDR
     path.write_text(
         path.read_text(encoding="utf-8").replace("export KUBECONFIG=", "KUBECONFIG="),
         encoding="utf-8",
     )
-    assert any(
-        m.startswith("runners/herdr.md") and "export KUBECONFIG=" in m for m in messages(repo)
-    )
+    assert any(m.startswith(HERDR) and "export KUBECONFIG=" in m for m in messages(repo))
 
 
 @network
@@ -209,7 +204,7 @@ def test_real_repo_is_clean(capsys):
 
 
 def test_claude_settings_deny_write_verbs_and_secrets():
-    settings = json.loads((ROOT / "config" / "claude-settings.example.json").read_text())
+    settings = json.loads((CONFIG / "claude-settings.example.json").read_text())
     deny = settings["permissions"]["deny"]
     for verb in WRITE_VERBS:
         assert f"Bash(kubectl {verb} *)" in deny, verb
@@ -218,7 +213,7 @@ def test_claude_settings_deny_write_verbs_and_secrets():
 
 def test_copilot_deny_tools_prints_every_verb():
     done = subprocess.run(
-        ["bash", str(ROOT / "config" / "copilot-deny-tools.sh")],
+        ["bash", str(CONFIG / "copilot-deny-tools.sh")],
         capture_output=True,
         text=True,
         check=True,
@@ -232,9 +227,9 @@ def test_copilot_deny_tools_prints_every_verb():
 @network
 def test_crew_line_chained_to_other_program_is_found(tmp_path):
     repo = make_repo(tmp_path)
-    path = repo / "runners" / "herdr.md"
+    path = repo / HERDR
     path.write_text(
         path.read_text(encoding="utf-8") + "\n```bash\nherdr agent list && rm -rf my-dir\n```\n",
         encoding="utf-8",
     )
-    assert any(m.startswith("runners/herdr.md:") and "rm" in m for m in messages(repo))
+    assert any(m.startswith(f"{HERDR}:") and "rm" in m for m in messages(repo))

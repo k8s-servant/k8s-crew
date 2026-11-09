@@ -3,7 +3,7 @@
 # matching config/claude-settings.example.json. A safety net, not a guarantee: command
 # matching is easy to get around, and the view-only kubeconfig is the real lock.
 #
-# Usage: eval "copilot $(config/copilot-deny-tools.sh)"
+# Usage, from the k8s-crew skill folder: eval "copilot $(config/copilot-deny-tools.sh)"
 set -euo pipefail
 
 verbs=(

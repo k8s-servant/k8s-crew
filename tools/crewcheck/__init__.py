@@ -29,13 +29,14 @@ FINDING_SECTIONS: tuple[str, ...] = (
     "### Proposed fixes",
 )
 
-AGENT = Path("agents/k8s-crew-investigator.md")
-ROLE = Path("roles/investigator.md")
-RECIPE = Path("recipes/triage.md")
-HERDR_RUNNER = Path("runners/herdr.md")
+# The skill folder is all that `npx skills add` installs, so everything the crew needs is in it.
+SKILL_DIR = Path("skills/k8s-crew")
+AGENT = SKILL_DIR / "agents" / "k8s-crew-investigator.md"
+ROLE = SKILL_DIR / "roles" / "investigator.md"
+RECIPE = SKILL_DIR / "recipes" / "triage.md"
+HERDR_RUNNER = SKILL_DIR / "runners" / "herdr.md"
 AGENT_NAME = "k8s-crew-investigator"
 AGENT_TOOLS = {"Bash", "Read", "Grep", "Glob"}
-MARKDOWN_DIRS = ("recipes", "roles", "runners")
 WRITE_HINT = "run python -m tools.crewcheck check --write"
 GENERATED_NOTE = (
     "<!-- Generated from roles/investigator.md by python -m tools.crewcheck check --write."
@@ -280,11 +281,8 @@ def collect(repo: Path, checker: Checker | None = None) -> list[Finding]:
         found.extend(check_skill(repo, skill))
         markdown(skill, body_only=True)
         for ref in sorted(skill.parent.rglob("*.md")):
-            if ref != skill:
+            if ref != skill and ref != repo / AGENT:
                 markdown(ref)
-    for folder in MARKDOWN_DIRS:
-        for path in sorted((repo / folder).rglob("*.md")):
-            markdown(path)
     for rel in (RECIPE, ROLE, HERDR_RUNNER):
         if not (repo / rel).is_file():
             found.append(Finding(rel, None, "file missing"))

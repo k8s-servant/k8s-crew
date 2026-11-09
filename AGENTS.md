@@ -10,6 +10,12 @@ read-only helpers), the tooling that checks them (`tools/crewcheck`) and a kind-
 test kit (`tests/`). It depends on [k8s-skills](https://github.com/k8s-servant/k8s-skills)
 for the investigation skills and the command allow-list.
 
+Layout: everything the crew needs at run time lives in the one skill folder
+`skills/k8s-crew/` (its `SKILL.md`, `recipes/`, `roles/`, `runners/`, `agents/`,
+`scripts/`, `config/`, `rbac/`), because `npx skills add` installs only that folder.
+Paths in those files are relative to it. `tools/` and `tests/` stay at the repository
+root.
+
 ## Commands
 
 ```bash

@@ -9,7 +9,8 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = ROOT / "scripts"
+SKILL = ROOT / "skills" / "k8s-crew"
+SCRIPTS = SKILL / "scripts"
 
 FAKE_KUBECTL = """#!/usr/bin/env bash
 echo "kubectl $*" >> "$FAKE_LOG"
@@ -57,7 +58,7 @@ def run(script, args, env):
 
 
 def test_rbac_never_mentions_secrets():
-    text = (ROOT / "rbac" / "crew-viewer.yaml").read_text()
+    text = (SKILL / "rbac" / "crew-viewer.yaml").read_text()
     assert "secrets" not in text
     assert "serviceaccounts/token" not in text
 
@@ -100,7 +101,7 @@ def test_preflight_finds_installed_agent(tmp_path):
 
 def test_install_agents_links_both(tmp_path):
     env, home = make_env(tmp_path)
-    source = ROOT / "agents" / "k8s-crew-investigator.md"
+    source = SKILL / "agents" / "k8s-crew-investigator.md"
     for _ in range(2):
         assert run("install-agents.sh", [], env).returncode == 0
     claude = home / ".claude/agents/k8s-crew-investigator.md"

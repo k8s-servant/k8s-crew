@@ -19,22 +19,35 @@ read-only investigator, check and link what they find, and write one short repor
 investigators look; you coordinate and conclude. **The crew never runs a fix**: every
 change is handed to the user, ready to run in their own terminal, with its undo.
 
-The files named below (`scripts/`, `recipes/`, `roles/`, `runners/`, `config/`) are in
-the k8s-crew folder, two folders above this `SKILL.md`. Run the scripts from that folder
-or with their full path.
+Every path below (`scripts/`, `recipes/`, `roles/`, `runners/`, `config/`, `rbac/`) is
+relative to the folder this `SKILL.md` is in. Run the scripts from that folder or with
+their full path.
 
-## 1. Check the identity
+## 1. Pick the mode
 
-The whole crew session must have only the view-only identity. Check it first, before
-anything else. For subagent mode (the default), pass the platform you run on:
+- **herdr mode** when `HERDR_ENV` is `1` and either the user asked for herdr (panes,
+  "next to me") or asked for helpers from more than one vendor. Investigators are
+  started as `runners/herdr.md` says.
+- **Subagent mode** otherwise. Investigators are started as `runners/subagents.md`
+  says.
+
+If the user asked for herdr but `HERDR_ENV` is not `1`, use subagent mode and say why.
+Decide the mode first, without running anything: the identity check in step 2 depends
+on it. Do not start investigators until step 4.
+
+## 2. Check the identity
+
+The whole crew session must have only the view-only identity. Check it before you run
+anything against the cluster. In subagent mode, pass the platform you run on:
 
 ```bash
 scripts/preflight.sh --subagents --platform claude
 scripts/preflight.sh --subagents --platform copilot
 ```
 
-Run the first line in Claude Code, the second in GitHub Copilot CLI. For herdr mode
-(step 3), run `scripts/preflight.sh` with no arguments. Then:
+Run the first line in Claude Code, the second in GitHub Copilot CLI. In herdr mode, run
+`scripts/preflight.sh` with no arguments: herdr helpers do not use the agent definition.
+Then:
 
 - **Exit 0, `viewer ok`:** carry on.
 - **Exit 3, `NOT view-only`:** stop. Show the user the script's output. The current
@@ -46,7 +59,7 @@ Run the first line in Claude Code, the second in GitHub Copilot CLI. For herdr m
   general-purpose subagent.
 - **Any other result:** stop and show the user the output.
 
-## 2. Check k8s-skills is installed
+## 3. Check k8s-skills is installed
 
 The crew depends on the k8s-skills skills: `k8s-triage`, and the specialists triage
 hands off to, at least `k8s-workload-troubleshooting`, `k8s-node-troubleshooting`,
@@ -58,15 +71,6 @@ If `k8s-triage` is missing, stop and tell the user exactly what to install:
 `npx skills add k8s-servant/k8s-skills` (or the k8s-skills Claude plugin), then start a
 new session. If only some specialists are missing, carry on, and name the missing ones
 in the report wherever an issue needed one.
-
-## 3. Pick the mode
-
-- **herdr mode** when `HERDR_ENV` is `1` and either the user asked for herdr (panes,
-  "next to me") or asked for helpers from more than one vendor. Follow
-  `runners/herdr.md`.
-- **Subagent mode** otherwise. Follow `runners/subagents.md`.
-
-If the user asked for herdr but `HERDR_ENV` is not `1`, use subagent mode and say why.
 
 ## 4. Run the triage recipe
 

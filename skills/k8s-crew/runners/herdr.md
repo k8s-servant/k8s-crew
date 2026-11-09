@@ -6,8 +6,9 @@ asked for helpers from more than one vendor (for example one Claude and one Copi
 The recipe, the investigator instructions, the report and the approval rules are the
 same as in subagent mode.
 
-In the commands below, `<crew-root>` is the k8s-crew folder (the one with `scripts/`
-and `roles/`), `<pane>` is a pane ID and `<name>` a helper name. Use full paths.
+In the commands below, `<skill-dir>` is the full path of the k8s-crew skill folder (the
+one with `SKILL.md`, `scripts/` and `roles/`), `<pane>` is a pane ID and `<name>` a
+helper name. Use full paths: helper panes may start in another folder.
 
 ## 1. Check you are inside herdr
 
@@ -60,7 +61,7 @@ If it prints nothing, the boss uses the default file; use the full path of
 `~/.kube/config`. Then, for each helper pane:
 
 ```bash
-herdr pane run <pane> "export KUBECONFIG='<boss-kubeconfig-path>' && <crew-root>/scripts/preflight.sh"
+herdr pane run <pane> "export KUBECONFIG='<boss-kubeconfig-path>' && <skill-dir>/scripts/preflight.sh"
 herdr pane wait-output <pane> --match "viewer ok" --timeout 30000
 ```
 
@@ -82,7 +83,7 @@ wait
   plan mode, a helper would write a plan and stop at "ready to execute?" instead of
   replying.
 - **Copilot helpers** should get the deny rules: add the flags that
-  `<crew-root>/config/copilot-deny-tools.sh` prints after the `--`.
+  `<skill-dir>/config/copilot-deny-tools.sh` prints after the `--`.
 
 If a start returns `agent_not_ready` (blocked during startup), it may only be loading:
 Copilot often reports this for a few seconds while it starts. Give it a 15-second grace
@@ -105,7 +106,7 @@ step 2 of the recipe:
 
 ```text
 Your kubeconfig is <boss-kubeconfig-path>; check that KUBECONFIG is set to it before
-anything else. Read <crew-root>/roles/investigator.md and follow it exactly: it is your
+anything else. Read <skill-dir>/roles/investigator.md and follow it exactly: it is your
 whole role. Your task: <issue, object and namespace, triage's evidence, the specialist
 skill and its SKILL.md path>. Do not change files.
 ```
