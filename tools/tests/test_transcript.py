@@ -550,3 +550,82 @@ def test_jq_builtins_that_read_still_fail(program):
     line = "kubectl get pods -o json | jq " + shlex.quote(program)
     problems = tier_problems([Command("boss", line)], load_checker(), PATHS)
     assert any("jq program" in p for p in problems), (program, problems)
+
+
+# jq string interpolation holds code, and a quote inside it ended the old string scan
+# early (jq 1.8.2 printed the environment). Any \( in a jq string fails closed.
+JQ_INTERPOLATION_BYPASSES = [
+    '"\\(""+(env|tostring))"',
+    '"\\("a"+(env.HOME)+"b")"',
+    '"\\(""+($ENV|tostring))"',
+    '"\\(""+([inputs]|tostring))"',
+    '@sh "\\(env)"',
+    '"\\(.metadata.name)"',
+    "modulemeta",
+    "get_jq_origin",
+    "get_prog_origin",
+]
+
+
+@network
+@pytest.mark.parametrize("program", JQ_INTERPOLATION_BYPASSES)
+def test_jq_interpolation_and_module_builtins_fail(program):
+    line = "kubectl get pods -o json | jq -r " + shlex.quote(program)
+    problems = tier_problems([Command("boss", line)], load_checker(), PATHS)
+    assert any("jq program" in p for p in problems), (program, problems)
+
+
+JQ_ARGUMENT_ESCAPES = [
+    "kubectl get pods -o json | jq . env",
+    "kubectl get pods -o json | jq -r '.items' 'env'",
+    "kubectl get pods -o json | jq --arg n v . '$ENV'",
+    "kubectl get pods -o json | jq --seq .",
+    "kubectl get pods -o json | jq -n .",
+    "kubectl get pods -o json | jq --tab .",
+    "kubectl get pods -o json | jq -rx .",
+    "kubectl get pods -o json | jq -- .",
+    "kubectl get pods -o json | jq --arg n",
+]
+
+
+@network
+@pytest.mark.parametrize("line", JQ_ARGUMENT_ESCAPES)
+def test_every_jq_argument_is_checked_and_unknown_options_fail(line):
+    problems = tier_problems([Command("boss", line)], load_checker(), PATHS)
+    assert any("jq" in p for p in problems), (line, problems)
+
+
+JQ_KNOWN_OPTIONS = [
+    "kubectl get pods -o json | jq -rc '.items[].metadata.name'",
+    "kubectl get pods -o json | jq --raw-output --compact-output .items",
+    "kubectl get pods -o json | jq -e --slurp '.[0]'",
+    "kubectl get pods -o json | jq --arg name env '.items[] | select(.metadata.name == $name)'",
+]
+
+
+@network
+@pytest.mark.parametrize("line", JQ_KNOWN_OPTIONS)
+def test_known_jq_options_pass(line):
+    assert tier_problems([Command("boss", line)], load_checker(), PATHS) == [], line
+
+
+@network
+@pytest.mark.parametrize(
+    "line",
+    [
+        "kubectl get pods -o json | jq . env",
+        "kubectl get pods -o json | jq -r '.items' 'env'",
+        "kubectl get pods -o json | jq --arg n v . '$ENV'",
+    ],
+)
+def test_jq_builtin_in_a_later_positional_is_found(line):
+    problems = tier_problems([Command("boss", line)], load_checker(), PATHS)
+    assert any("jq program reads" in p for p in problems), (line, problems)
+
+
+@network
+@pytest.mark.parametrize("option", ["--seq", "-n", "--tab", "-rx", "--", "--indent"])
+def test_unknown_jq_option_is_refused_by_name(option):
+    line = f"kubectl get pods -o json | jq {option} ."
+    problems = tier_problems([Command("boss", line)], load_checker(), PATHS)
+    assert any("jq option not allowed" in p for p in problems), (option, problems)

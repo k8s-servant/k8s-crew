@@ -162,11 +162,24 @@ _JQ_BUILTINS = frozenset(
         "$ENV",
         "$__loc__",
         "$__prog_args",
+        "modulemeta",
+        "get_jq_origin",
+        "get_prog_origin",
     }
 )
+# jq options the pinned checker allows, with how many values each takes. Any other
+# option fails: its arity is unknown, so a value could be read as the program or the
+# program as a value.
+_JQ_LONG_OPTIONS = {
+    "--raw-output": 0,
+    "--compact-output": 0,
+    "--exit-status": 0,
+    "--slurp": 0,
+    "--arg": 2,
+}
+_JQ_SHORT_OPTIONS = set("rces")
 _JQ_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*")
 _JQ_NUMBER = re.compile(r"\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
-_JQ_ANY = re.compile(r"(?<![\w.])(" + "|".join(re.escape(b) for b in _JQ_BUILTINS) + r")(?!\w)")
 _JQ_PAIRS = {"{": "}", "[": "]", "(": ")"}
 
 
@@ -182,18 +195,18 @@ def _jq_tokens(program: str) -> list[tuple[str, str]] | str:
             end = program.find("\n", i)
             i = n if end < 0 else end
         elif c == '"':
-            j, interpolated = i + 1, False
+            j = i + 1
             while j < n and program[j] != '"':
                 if program[j] == "\\":
-                    interpolated |= program[j + 1 : j + 2] == "("
+                    # "\(...)" holds code, and a quote inside it does not end the string,
+                    # so the string cannot be scanned without a jq parser: fail closed.
+                    if program[j + 1 : j + 2] == "(":
+                        return "jq program cannot be checked: string interpolation"
                     j += 2
                 else:
                     j += 1
             if j >= n:
                 return "jq program cannot be checked: unterminated string"
-            # "\(...)" holds code; fail closed if it names a builtin anywhere.
-            if interpolated and _JQ_ANY.search(program[i + 1 : j]):
-                return "jq program reads files or the environment"
             tokens.append(("str", program[i + 1 : j]))
             i = j + 1
         elif c in "$." and (ident := _JQ_IDENT.match(program, i + 1)):
@@ -216,8 +229,9 @@ def jq_program_problem(program: str) -> str | None:
 
     A builtin in _JQ_BUILTINS counts only where jq would call it: not as a field
     (``.env``, ``?.env``), an object key (``{env: ...}``, the shorthand ``{env}``) or
-    inside a string or comment. Anything that does not scan (an unterminated string,
-    unbalanced brackets) fails closed.
+    inside a string or comment. Anything that does not scan fails closed: a string with
+    a ``\\(...)`` interpolation (code that this scan does not parse), an unterminated
+    string, unbalanced brackets.
     """
     tokens = _jq_tokens(program)
     if isinstance(tokens, str):
@@ -345,22 +359,35 @@ def checkable(segments: list[list[str]]) -> str:
 
 
 def _jq_problems(segments: list[list[str]]) -> list[str]:
+    """Problems of every jq stage: unknown options, and every positional as a program.
+
+    jq reads only the first positional as its program and the rest as files, which the
+    pinned filter rules refuse; checking every positional as a program as well means a
+    miscounted option value can never hide one.
+    """
     problems: list[str] = []
     for words in segments:
         if not words or words[0] != "jq":
             continue
-        args = iter(words[1:])
-        for arg in args:
-            if arg == "--arg":
-                next(args, None)
-                next(args, None)
-            elif not arg.startswith("-"):
-                # The first positional is the program; any other is a file, which the
-                # pinned filter rules refuse.
-                if problem := jq_program_problem(arg):
-                    problems.append(problem)
-                break
-    return problems
+        args = words[1:]
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            i += 1
+            if arg.startswith("--"):
+                if arg not in _JQ_LONG_OPTIONS:
+                    problems.append(f"jq option not allowed: {arg}")
+                    continue
+                values = _JQ_LONG_OPTIONS[arg]
+                if i + values > len(args):
+                    problems.append(f"jq option {arg} needs {values} values")
+                i += values
+            elif arg.startswith("-") and arg != "-":
+                if not set(arg[1:]) <= _JQ_SHORT_OPTIONS:
+                    problems.append(f"jq option not allowed: {arg}")
+            elif problem := jq_program_problem(arg):
+                problems.append(problem)
+    return list(dict.fromkeys(problems))
 
 
 def split_command(line: str) -> list[str]:
