@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","session_id":"s1","tools":["Bash","Agent"]}
+{"type":"assistant","parent_tool_use_id":null,"message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_agent1","name":"Agent","input":{"subagent_type":"investigator","description":"Check pods","prompt":"Look at pods in my-namespace"}}]}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"role":"assistant","content":[{"type":"text","text":"Checking nodes first."},{"type":"tool_use","id":"toolu_bash1","name":"Bash","input":{"command":"kubectl get nodes"}}]}}
+{"type":"user","parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_bash1","content":"NAME STATUS"}]}}
+{"type":"assistant","parent_tool_use_id":"toolu_agent1","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_bash2","name":"Bash","input":{"command":"kubectl get pods -n my-namespace | grep -v Running"}}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"done"}
