@@ -65,11 +65,26 @@ ALLOWED_LOCAL = [
     "herdr pane split --current --direction right --cwd /home/me/my-project --no-focus",
     "herdr pane layout --pane my-pane | jq .result",
     "herdr pane wait-output my-pane --match 'viewer ok' --timeout 30000",
-    "herdr pane run my-pane '/x/skills/k8s-crew/scripts/crew-start.sh --viewer /x/v shell'",
+    (
+        "herdr pane run my-pane '/x/skills/k8s-crew/scripts/crew-start.sh --viewer "
+        "/home/me/.kube/k8s-crew-viewer shell'"
+    ),
+    (
+        "herdr pane run my-pane '/tmp/run/skills/k8s-crew/scripts/crew-start.sh --viewer "
+        "/tmp/run/viewer.kubeconfig shell'"
+    ),
     'herdr pane run my-pane "/x/skills/k8s-crew/scripts/preflight.sh"',
     (
+        "herdr agent start crew-copilot --kind copilot --pane my-pane --timeout 60000 -- "
+        "--deny-tool 'shell(kubectl delete:*)' --deny-tool 'read(/home/me/.kube/**)'"
+    ),
+    (
+        "herdr agent start crew-copilot --kind copilot --pane my-pane --timeout 60000 -- "
+        "--allow-tool 'shell(kubectl:*)' --deny-tool 'shell(kubectl delete:*)'"
+    ),
+    (
         "herdr agent start crew-claude --kind claude --pane my-pane --timeout 60000 -- "
-        "--permission-mode default --settings /x/config/claude-settings.example.json"
+        "--permission-mode default --settings /x/skills/k8s-crew/config/claude-settings.example.json"
     ),
     (
         "herdr agent prompt crew-claude 'Look at kubectl get pods -n my-namespace output' --wait "
@@ -81,7 +96,8 @@ ALLOWED_LOCAL = [
     "printenv HERDR_ENV",
     "printenv KUBECONFIG",
     "/x/skills/k8s-crew/scripts/preflight.sh --subagents --platform claude",
-    "scripts/preflight.sh",
+    "/home/me/.claude/plugins/cache/m/k8s-crew/abc/skills/k8s-crew/scripts/preflight.sh",
+    "/x/.claude/skills/k8s-crew/scripts/preflight.sh --subagents --platform copilot",
     "kubectl get pods -A | grep -v Running | wc -l",
 ]
 
@@ -137,6 +153,86 @@ LOCAL_ESCAPES = [
     "/tmp/preflight.sh.evil",
     "KUBECONFIG=/home/me/.kube/config herdr agent list",
 ]
+
+# crew-start.sh is run only by the boss, only in a helper pane, only in this exact form:
+#   herdr pane run <pane> "<skill-dir>/scripts/crew-start.sh --viewer <viewer> shell"
+CREW_START = "/x/skills/k8s-crew/scripts/crew-start.sh"
+VIEWER = "/home/me/.kube/k8s-crew-viewer"
+LAUNCHER_ESCAPES = [
+    f'{CREW_START} shell -c "docker exec k8s-crew-test-worker systemctl restart kubelet"',
+    'scripts/crew-start.sh shell -c "curl -X DELETE https://127.0.0.1:6443/api/v1/x"',
+    "crew-start.sh shell -c ssh-node",
+    'herdr pane run p "crew-start.sh shell -c ssh-node"',
+    f"herdr pane run p '{CREW_START} --viewer {VIEWER} shell -c ssh-node'",
+    f"herdr pane run p '{CREW_START} --viewer {VIEWER} shell --rcfile /tmp/rc'",
+    "skills/k8s-crew/scripts/crew-start.sh --viewer /home/u/.kube/config shell",
+    f"herdr pane run p '{CREW_START} --viewer /home/u/.kube/config shell'",
+    f"herdr pane run p '{CREW_START} --viewer /tmp/admin.kubeconfig shell'",
+    f"herdr pane run p '{CREW_START} --viewer relative/viewer.kubeconfig shell'",
+    f"herdr pane run p '{CREW_START} --viewer {VIEWER}:/home/u/.kube/config shell'",
+    f"herdr pane run p '{CREW_START} shell'",
+    f"herdr pane run p '{CREW_START} --viewer {VIEWER} --viewer /home/u/.kube/config shell'",
+    "crew-start.sh --auto-allow claude -p hi --dangerously-skip-permissions",
+    f"herdr pane run p '{CREW_START} --viewer {VIEWER} claude'",
+    f"herdr pane run p '{CREW_START} --viewer {VIEWER} --auto-allow copilot'",
+    f"herdr pane run '{CREW_START} --viewer {VIEWER} shell'",  # no pane given
+    f"herdr pane run p '/tmp/evil/crew-start.sh --viewer {VIEWER} shell'",
+    f"{CREW_START} --viewer {VIEWER} shell",  # never at top level: it replaces the shell
+]
+
+# Helper starts: only the documented argument shapes after --.
+HELPER_START_ESCAPES = [
+    "herdr agent start crew-claude --kind claude --pane p -- --allowedTools Bash",
+    "herdr agent start crew-claude --kind claude --pane p -- --permission-mode default",
+    (
+        "herdr agent start crew-claude --kind claude --pane p -- --permission-mode default "
+        "--settings /tmp/my-settings.json"
+    ),
+    (
+        "herdr agent start crew-claude --kind claude --pane p -- --permission-mode default "
+        "--settings /x/skills/k8s-crew/config/claude-settings.example.json --allowedTools Bash"
+    ),
+    "herdr agent start crew-claude --kind claude --pane p",
+    "herdr agent start crew-copilot --kind copilot --pane p -- --allow-tool shell",
+    "herdr agent start crew-copilot --kind copilot --pane p -- --allow-tool 'shell(rm:*)'",
+    "herdr agent start crew-copilot --kind copilot --pane p -- --deny-tool",
+    "herdr agent start crew-copilot --kind copilot --pane p -- --model x",
+    "herdr agent start crew-codex --kind codex --pane p -- --full-auto",
+    (
+        "herdr agent start crew-claude --kind claude --pane p --cwd /tmp -- --permission-mode "
+        "default --settings /x/skills/k8s-crew/config/claude-settings.example.json"
+    ),
+]
+
+# preflight.sh only from a k8s-crew skill folder, with only its documented flags.
+PREFLIGHT_ESCAPES = [
+    "/tmp/x/scripts/preflight.sh",
+    "scripts/preflight.sh",
+    "preflight.sh",
+    "/x/skills/other/scripts/preflight.sh",
+    "/x/skills/k8s-crew/scripts/preflight.sh --platform claude --evil",
+    "/x/skills/k8s-crew/scripts/preflight.sh --subagents --platform codex",
+]
+
+# Filters read stdin only: any file argument fails, under ~, absolute or relative.
+FILTER_FILE_READS = [
+    "grep -r client-key-data ~",
+    "grep client-key-data /home/me/.kube/config",
+    "jq . /home/me/.azure/msal_token_cache.json",
+    "kubectl get pods | grep -r key /home/me",
+    "kubectl get pods | grep x ./notes",
+    "egrep -e token /etc/kubernetes/admin.conf",
+    "head -n 5 /home/me/.aws/credentials",
+    "cut -d: -f1 /etc/passwd",
+]
+
+
+@network
+@pytest.mark.parametrize(
+    "line", LAUNCHER_ESCAPES + HELPER_START_ESCAPES + PREFLIGHT_ESCAPES + FILTER_FILE_READS
+)
+def test_launcher_helper_preflight_and_filter_escapes_fail(line):
+    assert tier_problems([Command("boss", line)], load_checker()), line
 
 
 @network

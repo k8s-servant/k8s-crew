@@ -28,35 +28,43 @@ from pathlib import Path
 EXTRA_CLUSTER_TOOLS = ("helm", "flux", "argocd", "istioctl", "cilium", "velero")
 _SEPARATORS = ("&&", "||", ";", "\n")
 
-# Local programs a crew run may use besides cluster tools, each for one reason. Keep it
-# minimal: every entry is a way to act outside the pinned checker.
+# Local programs a crew run may use besides cluster tools, each for one reason and only
+# in the forms the crew's own files tell an agent to run. Keep it minimal: every entry is
+# a way to act outside the pinned checker.
 #   - the pipe filters: read stdin only (their flags and arguments are checked by the
-#     pinned checker's filter rules, so a file argument fails);
+#     pinned checker's filter rules, so any file argument fails);
 #   - herdr: the boss's own orchestration in herdr mode, limited to HERDR_SUBCOMMANDS;
-#     the text of ``herdr pane run`` is a command in another pane and is checked too;
-#   - the crew's own scripts, by name: preflight.sh (the identity check) and
-#     crew-start.sh (what ``herdr pane run`` uses to give a helper pane the guard);
+#     the text of ``herdr pane run`` is a command in another pane and is checked too,
+#     and ``herdr agent start`` only takes the helper arguments runners/herdr.md gives;
+#   - preflight.sh from a k8s-crew skill folder, by full path, with its documented flags;
+#   - crew-start.sh only as the text of ``herdr pane run``, exactly
+#     ``<skill-dir>/scripts/crew-start.sh --viewer <viewer kubeconfig> shell``: that is
+#     the one form runners/herdr.md gives. Agents never start claude or copilot with it,
+#     and any other form (``shell -c ...``, ``--auto-allow``, another kubeconfig) would
+#     run outside this check;
 #   - ``printenv NAME``: the herdr runner reads HERDR_ENV, PWD, HERDR_PANE_ID and
 #     KUBECONFIG to write their values into later commands, since commands may not use
 #     shell variables. One name per call: a bare printenv would print every variable.
 FILTERS = ("grep", "egrep", "head", "tail", "sort", "uniq", "wc", "cut", "column", "jq")
-CREW_SCRIPTS = ("preflight.sh", "crew-start.sh")
-LOCAL_PROGRAMS = (*FILTERS, "herdr", *CREW_SCRIPTS, "printenv")
+LOCAL_PROGRAMS = (*FILTERS, "herdr", "preflight.sh", "crew-start.sh", "printenv")
 HERDR_SUBCOMMANDS = {
     "pane": {"split", "list", "get", "layout", "run", "wait-output", "read", "close"},
     "agent": {"list", "get", "start", "prompt", "wait", "read"},
 }
-# Agent flags that switch off the agent's own permission prompts.
-_AGENT_BYPASS = {
-    "--dangerously-skip-permissions",
-    "--allow-dangerously-skip-permissions",
-    "bypassPermissions",
-    "--permission-mode=bypassPermissions",
-    "--allow-all-tools",
-    "--allow-all",
-    "--allow-all-paths",
-    "--yolo",
-}
+_PREFLIGHT = re.compile(r"/.*(?<![^/])k8s-crew/scripts/preflight\.sh")
+_CREW_START = re.compile(r"/.*(?<![^/])k8s-crew/scripts/crew-start\.sh")
+_CLAUDE_SETTINGS = re.compile(r"/.*(?<![^/])k8s-crew/config/claude-settings\.example\.json")
+_PREFLIGHT_ARGS = (
+    [],
+    ["--subagents", "--platform", "claude"],
+    ["--subagents", "--platform", "copilot"],
+)
+# The viewer kubeconfig names the crew writes: viewer-kubeconfig.sh's default
+# (~/.kube/k8s-crew-viewer) and the test kit's (<run>/viewer.kubeconfig). Nothing in the
+# transcript says which file the session was started with, so the name is the check;
+# crew-start.sh itself refuses a file that is not a crew viewer kubeconfig.
+_VIEWER = re.compile(r"/[^:]*/(k8s-crew-viewer|[^/:]*viewer\.kubeconfig)")
+_HERDR_START_OPTIONS = {"--kind", "--pane", "--timeout"}
 _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
 
 
@@ -118,11 +126,45 @@ def is_cluster_command(piece: str, allowlist: dict) -> bool:
     return re.search(pattern, piece) is not None
 
 
-def _crew_script(program: str) -> bool:
-    name = program.rsplit("/", 1)[-1]
-    return name in CREW_SCRIPTS and (
-        program in (name, f"scripts/{name}") or program.endswith(f"/scripts/{name}")
-    )
+def _herdr_start_problems(args: list[str]) -> list[str]:
+    """``herdr agent start <name> --kind K --pane P [--timeout N] -- <helper args>``."""
+    if "--" not in args:
+        return ["herdr agent start without the crew helper arguments after --"]
+    split = args.index("--")
+    options, helper = args[1:split], args[split + 1 :]
+    pairs = dict(zip(options[::2], options[1::2], strict=False))
+    if len(options) % 2 or not set(pairs) <= _HERDR_START_OPTIONS or len(pairs) * 2 != len(options):
+        return [f"herdr agent start option not allowed: {' '.join(options)}"]
+    kind = pairs.get("--kind")
+    if kind == "claude":
+        ok = (
+            len(helper) == 4
+            and helper[:3] == ["--permission-mode", "default", "--settings"]
+            and _CLAUDE_SETTINGS.fullmatch(helper[3])
+        )
+        if not ok:
+            return [
+                (
+                    "a Claude helper starts only with: --permission-mode default --settings "
+                    "<skill-dir>/config/claude-settings.example.json"
+                )
+            ]
+    elif kind == "copilot":
+        rules = list(zip(helper[::2], helper[1::2], strict=False))
+        ok = (
+            helper
+            and len(helper) % 2 == 0
+            and all(
+                (flag == "--deny-tool" and rule)
+                or (flag == "--allow-tool" and rule == "shell(kubectl:*)")
+                for flag, rule in rules
+            )
+        )
+        if not ok:
+            return ["a Copilot helper starts only with the copilot-deny-tools.sh --lines rules"]
+    else:
+        return [f"helper kind not allowed: {kind}"]
+    return []
 
 
 def _herdr_problems(args: list[str], checker, nested: bool) -> list[str]:
@@ -133,14 +175,32 @@ def _herdr_problems(args: list[str], checker, nested: bool) -> list[str]:
             return ["herdr pane run takes one pane and one command"]
         return [f"in pane: {problem}" for problem in command_problems(args[3], checker, True)]
     if args[:2] == ["agent", "start"]:
-        bypass = sorted(set(args) & _AGENT_BYPASS)
-        if bypass:
-            return [f"agent started without its permission prompts: {', '.join(bypass)}"]
+        return _herdr_start_problems(args[2:])
     return []
 
 
-def _local_problems(piece: str, checker) -> list[str] | str:
-    """Problems of a piece that is not a cluster command, or "herdr" for herdr plumbing."""
+def _crew_start_problems(words: list[str], nested: bool) -> list[str]:
+    if not nested:
+        return ["crew-start.sh runs only as the text of herdr pane run"]
+    ok = (
+        len(words) == 4
+        and _CREW_START.fullmatch(words[0])
+        and words[1] == "--viewer"
+        and _VIEWER.fullmatch(words[2])
+        and words[3] == "shell"
+    )
+    if not ok:
+        return [
+            (
+                "crew-start.sh is allowed only as: <skill-dir>/scripts/crew-start.sh "
+                "--viewer <viewer kubeconfig> shell"
+            )
+        ]
+    return []
+
+
+def _local_problems(piece: str, checker, nested: bool = False) -> list[str]:
+    """Problems of a piece that is not a cluster command; "herdr" marks herdr plumbing."""
     module = checker.commands_module
     segments = module._scan(piece)
     if segments == "control":
@@ -150,14 +210,21 @@ def _local_problems(piece: str, checker) -> list[str] | str:
     problems: list[str] = []
     for index, words in enumerate(segments):
         program = words[0] if words else ""
+        name = program.rsplit("/", 1)[-1]
         if index and program not in FILTERS:
             problems.append("pipe must lead to an allow-listed filter")
         elif program in FILTERS:
             problems += module._check_filter(words, checker.allowlist)
         elif program == "herdr":
             problems.append("herdr")
-        elif _crew_script(program):
-            pass
+        elif name == "preflight.sh":
+            if not _PREFLIGHT.fullmatch(program) or words[1:] not in _PREFLIGHT_ARGS:
+                problems.append(
+                    "preflight.sh is allowed only by its full path in a k8s-crew skill "
+                    "folder, with no flags or --subagents --platform claude|copilot"
+                )
+        elif name == "crew-start.sh":
+            problems += _crew_start_problems(words, nested)
         elif program == "printenv":
             if len(words) != 2 or not _ENV_NAME.fullmatch(words[1]):
                 problems.append("printenv takes exactly one variable name")
@@ -174,7 +241,7 @@ def command_problems(line: str, checker, nested: bool = False) -> list[str]:
         return [f"cannot parse {line!r}: {exc}"]
     problems: list[str] = []
     for piece in pieces:
-        local = _local_problems(piece, checker)
+        local = _local_problems(piece, checker, nested)
         if "herdr" in local:
             # herdr plumbing: its own arguments (prompt text, agent flags) are not shell
             # commands; only the text of `herdr pane run` is checked as one.
