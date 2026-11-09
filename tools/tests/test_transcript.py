@@ -381,3 +381,73 @@ def test_stream_bash_without_command_raises(tmp_path):
     )
     with pytest.raises(ValueError):
         read_claude_stream(path)
+
+
+# Read-only commands with shell metacharacters inside quotes, from the local test runs
+# (runs/node-dns-cascade/claude-subagents-1, runs/healthy-noise/claude-subagents-3). The
+# pinned checker refuses any backslash or brace, so the crew tokenizes the line itself.
+QUOTED_READS = [
+    (
+        'kubectl get endpointslices -n my-namespace -o json | jq ".items[] | {name: '
+        '.metadata.name, svc: .metadata.labels[\\"kubernetes.io/service-name\\"], '
+        'endpoints: .endpoints}"'
+    ),
+    (
+        "kubectl get pod my-app-696cdb58db-b947h -n my-namespace -o jsonpath="
+        '{.status.conditions}{"\\n"}{.spec.containers[0].readinessProbe}'
+    ),
+    "kubectl get pods -n my-namespace -o json | jq '.items[] | .metadata.name'",
+    "kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.name}{\"\\n\"}{end}'",
+    (
+        'kubectl get pods -o json | jq -r \'.items[] | select(.status.phase != "Running") '
+        "| .metadata.name; .kind & 1'"
+    ),
+    (
+        "kubectl get deployment coredns -n kube-system -o jsonpath='{.spec.template.spec."
+        'nodeSelector}{"\\n"}{.status}\''
+    ),
+    'kubectl get pods -o json | jq ".items | length"',
+]
+
+
+@network
+@pytest.mark.parametrize("line", QUOTED_READS)
+def test_quoted_metacharacters_in_read_only_commands_pass(line):
+    assert tier_problems([Command("boss", line)], load_checker(), PATHS) == []
+
+
+QUOTED_ESCAPES = [
+    'kubectl get pods "x" ; curl -X DELETE https://127.0.0.1:6443/api/v1/x',
+    'kubectl get pods "x" & curl https://127.0.0.1:6443',
+    'kubectl get pods "$(kubectl delete pod x)"',
+    'kubectl get pods "`id`"',
+    "kubectl get pods `id`",
+    'kubectl get pods -l "app=${APP}"',
+    'kubectl get pods -l "app=$APP"',
+    "kubectl get pods -l $'a\\nb'",
+    'kubectl get pods "x" | sh',
+    "kubectl get pods -o json | jq '.' > /tmp/out",
+    "kubectl get pods {a,b}",
+    "kubectl get pods {x..y}",
+    "{ kubectl delete pod x; }",
+    r"kubectl get pods x\;y",
+    "kubectl get pods 'unterminated",
+    'kubectl get pods "x" |& grep y',
+    "kubectl get pods -o json | jq 'import \"a\" as a; .'",
+    "kubectl get pods -o json | jq 'include \"a\"; .'",
+    "kubectl get pods -o json | jq '$ENV.GH_TOKEN'",
+    "kubectl get pods -o json | jq 'env.GH_TOKEN'",
+    "kubectl get pods -o json | jq 'input_filename'",
+    "kubectl get pods -o json | jq '$__loc__'",
+    "kubectl get pods -o json | jq --rawfile a /home/me/.kube/config .",
+    "kubectl get pods -o json | jq -f /tmp/prog.jq",
+    'kubectl get secret -n my-namespace -o "jsonpath={.data}"',
+    "kubectl delete pod 'my-pod' -n my-namespace",
+    "kubectl get pods -o 'jsonpath-file=/tmp/x'",
+]
+
+
+@network
+@pytest.mark.parametrize("line", QUOTED_ESCAPES)
+def test_unquoted_control_and_substitution_still_fail(line):
+    assert tier_problems([Command("boss", line)], load_checker(), PATHS), line

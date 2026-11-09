@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -146,6 +147,115 @@ def _scan(line: str, separators: tuple[str, ...]) -> list[str]:
     return [p.strip() for p in pieces if p.strip()]
 
 
+_EXPANDS = re.compile(r"[A-Za-z_{(0-9@*#?!$'\"-]")
+# jq builtins that read files or the environment: the pinned checker only checks jq's
+# flags and arguments, not its program.
+_JQ_READS = re.compile(
+    r"(?<![\w.$])(import|include|env|input_filename|get_search_list)(?!\w)"
+    r"|\$(ENV|__loc__|__prog_args)(?!\w)"
+)
+
+
+class _Control(Exception):
+    pass
+
+
+def shell_words(piece: str) -> list[list[str]] | str:
+    """Split one piece into pipe stages of words, the way bash would, quotes resolved.
+
+    Text inside quotes is literal, so a ``|``, ``;``, ``&``, brace or newline there is
+    argument text (a jq program, a jsonpath template). Everything bash would expand or
+    treat as control is refused rather than interpreted: command substitution (``$(``,
+    backticks, also inside double quotes), variables, ``$'...'``, unquoted ``;&<>()``,
+    ``|&``, an unquoted backslash, and unquoted braces that bash would expand (with a
+    ``,`` or ``..``) or that open a group. Inside double quotes a backslash keeps its
+    literal meaning except before ``"`` and ``\\``.
+
+    Returns:
+        The stages, or "control" or "parse" naming the problem.
+    """
+    segments: list[list[str]] = [[]]
+    word: list[str] = []
+    bare: list[str] = []  # the word's unquoted characters
+    state = {"in_word": False}
+    quote = None
+
+    def flush() -> None:
+        if state["in_word"]:
+            text = "".join(bare)
+            braces = "{" in text or "}" in text
+            if text in ("{", "}") or (braces and ("," in text or ".." in text)):
+                raise _Control
+            segments[-1].append("".join(word))
+        word.clear()
+        bare.clear()
+        state["in_word"] = False
+
+    i = 0
+    try:
+        while i < len(piece):
+            c = piece[i]
+            nxt = piece[i + 1] if i + 1 < len(piece) else ""
+            i += 1
+            if quote == "'":
+                if c == "'":
+                    quote = None
+                else:
+                    word.append(c)
+                continue
+            if c == "`" or (c == "$" and nxt and _EXPANDS.match(nxt)):
+                return "control"
+            if quote == '"':
+                if c == '"':
+                    quote = None
+                elif c == "\\" and nxt in ('"', "\\"):
+                    word.append(nxt)
+                    i += 1
+                elif c == "\\" and nxt in ("$", "`", "\n", ""):
+                    return "control"
+                else:
+                    word.append(c)
+                continue
+            if c == "\\":
+                return "control"
+            if c in "'\"":
+                quote = c
+                state["in_word"] = True
+            elif c.isspace():
+                flush()
+            elif c == "|":
+                if nxt in ("|", "&"):
+                    return "control"
+                flush()
+                segments.append([])
+            elif c in ";&<>()":
+                return "control"
+            else:
+                word.append(c)
+                bare.append(c)
+                state["in_word"] = True
+        if quote:
+            return "parse"
+        flush()
+    except _Control:
+        return "control"
+    return segments
+
+
+def checkable(segments: list[list[str]]) -> str:
+    """The stages written back with plain single quoting, which the pinned checker reads."""
+    return " | ".join(shlex.join(words) for words in segments)
+
+
+def _jq_problems(segments: list[list[str]]) -> list[str]:
+    for words in segments:
+        if words and words[0] == "jq":
+            for arg in words[1:]:
+                if not arg.startswith("-") and _JQ_READS.search(arg):
+                    return ["jq program reads files or the environment"]
+    return []
+
+
 def split_command(line: str) -> list[str]:
     """Split on ``&&``, ``||``, ``;`` and newline outside quotes. Pipes stay in a piece."""
     return _scan(line, _SEPARATORS)
@@ -241,12 +351,12 @@ def _crew_start_problems(words: list[str], nested: bool, paths: RunPaths) -> lis
 def _local_problems(piece: str, checker, nested: bool, paths: RunPaths) -> list[str]:
     """Problems of a piece that is not a cluster command; "herdr" marks herdr plumbing."""
     module = checker.commands_module
-    segments = module._scan(piece)
+    segments = shell_words(piece)
     if segments == "control":
         return ["shell control not allowed"]
     if segments == "parse":
         return ["cannot parse command"]
-    problems: list[str] = []
+    problems: list[str] = _jq_problems(segments)
     for index, words in enumerate(segments):
         program = words[0] if words else ""
         name = program.rsplit("/", 1)[-1]
@@ -288,11 +398,21 @@ def command_problems(
         if "herdr" in local:
             # herdr plumbing: its own arguments (prompt text, agent flags) are not shell
             # commands; only the text of `herdr pane run` is checked as one.
-            words = checker.commands_module._scan(piece)[0]
+            words = shell_words(piece)[0]
             reasons = [r for r in local if r != "herdr"]
             reasons += _herdr_problems(words[1:], checker, nested, paths)
         elif is_cluster_command(piece, checker.allowlist):
-            reasons = checker.check_command(piece) + checker.secret_problems(piece)
+            segments = shell_words(piece)
+            if segments == "control":
+                reasons = ["shell control not allowed"]
+            elif segments == "parse":
+                reasons = ["cannot parse command"]
+            else:
+                # The pinned checker judges the bash-resolved words; Secret mentions are
+                # checked on the raw text too.
+                text = checkable(segments)
+                reasons = checker.check_command(text) + checker.secret_problems(text)
+                reasons += checker.secret_problems(piece) + _jq_problems(segments)
         else:
             reasons = local
         problems += [f"{piece!r}: {reason}" for reason in dict.fromkeys(reasons)]
