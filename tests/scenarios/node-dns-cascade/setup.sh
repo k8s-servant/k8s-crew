@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Pin CoreDNS to the worker node, then deploy my-api (nginx) and my-app (a busybox
 # client that calls my-api by its Service name in a loop) on the control-plane node, so
-# only DNS depends on the worker. Waits until everything is placed and Ready.
+# only DNS depends on the worker. Waits until everything is placed and Ready, then lets
+# the pin settle (CREW_PIN_SETTLE_SECONDS, default 120) so it does not look like a
+# change made just before the fault.
 set -euo pipefail
 # shellcheck source=../../lib.sh disable=SC1091
 source "$(dirname "$0")/../../lib.sh"
@@ -40,6 +42,20 @@ done
 if [[ -n "$elsewhere" ]]; then
   echo "CoreDNS pods still off $WORKER: $elsewhere" >&2
   exit 1
+fi
+
+# The pin is meant as a standing weakness, not today's change: a cluster pinned like this
+# has usually been so for weeks, with nothing in its rollout history and no recent
+# managedFields time on the pin. The API server stamps that time and it cannot be
+# backdated, so the scenario does the next best thing: it removes the unpinned
+# ReplicaSet the patch left behind (0 replicas), so the pinned one is the only revision
+# there is, and at the end it waits before break.sh stops the kubelet, so the pin is
+# minutes older than the fault instead of seconds.
+unpinned="$(kubectl -n kube-system get replicasets -l k8s-app=kube-dns \
+  -o jsonpath='{.items[?(@.spec.replicas==0)].metadata.name}')"
+if [[ -n "$unpinned" ]]; then
+  # shellcheck disable=SC2086 # one ReplicaSet name per word
+  kubectl -n kube-system delete replicaset $unpinned
 fi
 
 kubectl apply -f - <<YAML
@@ -150,3 +166,12 @@ spec:
 YAML
 kubectl -n my-namespace rollout status deployment/my-api --timeout=180s
 kubectl -n my-namespace rollout status deployment/my-app --timeout=180s
+
+settle="${CREW_PIN_SETTLE_SECONDS:-120}"
+if [[ ! "$settle" =~ ^[0-9]+$ ]]; then
+  echo "CREW_PIN_SETTLE_SECONDS must be a number of seconds: $settle" >&2
+  exit 64
+fi
+if ((settle > 0)); then
+  sleep "$settle"
+fi

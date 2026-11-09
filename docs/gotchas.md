@@ -155,6 +155,14 @@ submit the prompt early, so the prompt is one line.
 
 ## Test kit
 
+### node-dns-cascade setup waits two minutes
+
+`setup.sh` pins CoreDNS to the worker, removes the unpinned ReplicaSet and then waits
+`CREW_PIN_SETTLE_SECONDS` (default 120) before `break.sh` may stop the kubelet. The pin
+is meant as a standing weakness; set seconds before the fault, its `managedFields` time
+made the crew read it as a co-cause. The API server stamps that time, so it cannot be
+backdated; the wait only makes the gap minutes instead of seconds.
+
 ### healthy-noise must run within an hour of break.sh
 
 The `healthy-noise` scenario depends on old Warning events from a pod that is healthy

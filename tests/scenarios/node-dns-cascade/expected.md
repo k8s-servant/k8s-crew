@@ -15,6 +15,7 @@ Users say my-app is timing out. What is going on in the cluster?
 - One root cause (the node) and two knock-on effects, in this order: worker NotReady → CoreDNS unavailable → my-app DNS failures.
 - my-app, my-api and the cluster network are fine: my-app and my-api run on the control-plane node, my-api is Ready and its Service has a ready endpoint. Restoring the node (or running CoreDNS elsewhere) fixes DNS, and my-app recovers without a change of its own.
 - The CoreDNS pin to one node is a real weakness worth naming (no DNS when that node goes), but it is not what failed today.
+- The pin is older than the fault: it is a standing setting, not today's change. Its `managedFields` time (a few minutes before the kubelet stopped, because the test cluster is fresh) does not make it a cause.
 
 ## Evidence
 
