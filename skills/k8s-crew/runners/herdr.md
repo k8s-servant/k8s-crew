@@ -82,8 +82,11 @@ wait
 - **Claude helpers** start with `--permission-mode default`. If the user's default is
   plan mode, a helper would write a plan and stop at "ready to execute?" instead of
   replying.
-- **Copilot helpers** should get the deny rules: add the flags that
-  `<skill-dir>/config/copilot-deny-tools.sh` prints after the `--`.
+- **Copilot helpers** should get the permission rules. Run
+  `<skill-dir>/config/copilot-deny-tools.sh --lines`: it prints one argument per line,
+  with no quotes. Add each line after the `--`, in single quotes (the arguments
+  contain spaces and parentheses but never a quote). Copilot rules match only leading
+  words, so flags cannot be denied; the viewer identity set in step 4 is the lock.
 
 If a start returns `agent_not_ready` (blocked during startup), it may only be loading:
 Copilot often reports this for a few seconds while it starts. Give it a 15-second grace

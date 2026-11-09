@@ -48,8 +48,13 @@ Up to 2 investigators by default: Copilot Free runs 2 subagents at a time (Pro 4
 Business 16, Enterprise 32). Use more only when the user says their plan allows it, and
 never more than 4.
 
-Copilot CLI applies the session's `--deny-tool` rules to subagents too, so the rules
-from `config/copilot-deny-tools.sh` cover investigators.
+Copilot CLI applies the session's `--allow-tool` and `--deny-tool` rules to subagents
+too. The user starts the session with `config/copilot-deny-tools.sh --run` (by its full
+path, in place of `copilot`; any further arguments go to `copilot`). It allows kubectl
+and denies every kubectl command that is not read-only, and Secret reads. Copilot rules
+match only a command's leading words: an allow rule cannot name a subcommand, and
+flags such as `--context` or `--kubeconfig` cannot be denied. The view-only identity is
+what blocks writes and other clusters.
 
 Docs: https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/create-custom-agents-for-cli
 

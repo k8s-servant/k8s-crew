@@ -108,6 +108,8 @@ If the user gave no problem description, start the sweep anyway: triage is built
 - If the user asks the crew to apply a fix, say the crew session is view-only by design
   and point them to the command in the report.
 
-Example settings that block kubectl write commands as a second line of defence are in
+Example rules that block kubectl write commands as a second line of defence are in
 `config/claude-settings.example.json` (Claude Code) and `config/copilot-deny-tools.sh`
-(Copilot CLI). They are a safety net; the view-only identity is the real lock.
+(Copilot CLI; start the session with `config/copilot-deny-tools.sh --run`). They are a
+safety net that cannot match every form of a command (Copilot cannot deny flags at
+all); the view-only identity is the real lock.

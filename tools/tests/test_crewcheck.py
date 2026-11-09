@@ -309,3 +309,64 @@ def test_skill_states_plain_command_rule_for_the_boss(tmp_path, needle):
     assert needle in text
     path.write_text(text.replace(needle, "x"), encoding="utf-8")
     assert any(m.startswith(f"{SKILL}/SKILL.md") and needle in m for m in messages(repo))
+
+
+def copilot_args(*args, env=None):
+    done = subprocess.run(
+        ["bash", str(CONFIG / "copilot-deny-tools.sh"), *args],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    return done.stdout
+
+
+def test_copilot_lines_have_no_quotes_and_pair_each_flag():
+    lines = copilot_args("--lines").splitlines()
+    assert not any(c in "".join(lines) for c in "'\"\\`$")
+    assert lines[:2] == ["--allow-tool", "shell(kubectl:*)"]
+    pairs = list(zip(lines[::2], lines[1::2], strict=True))
+    assert all(flag in ("--allow-tool", "--deny-tool") for flag, _ in pairs)
+    denied = {rule for flag, rule in pairs if flag == "--deny-tool"}
+    for verb in WRITE_VERBS + ["get secret", "get secrets", "describe secret", "config"]:
+        assert f"shell(kubectl {verb}:*)" in denied, verb
+    # Copilot 1.0.107 matches leading words only: no wildcard before the end of a rule.
+    for _flag, rule in pairs:
+        assert "*" not in rule.removesuffix(":*)"), rule
+
+
+@network
+def test_copilot_denies_every_kubectl_command_that_is_not_run_freely():
+    from tools.k8sskills import load_checker
+
+    allowlist = load_checker().allowlist
+    run_freely = {c.split()[0] for c in allowlist["commands"]["kubectl"]}
+    lines = copilot_args("--lines").splitlines()
+    denied = {r.removeprefix("shell(kubectl ").removesuffix(":*)") for r in lines[3::2]}
+    for name in allowlist["kubectl_commands"]:
+        if name not in run_freely and name != "help":
+            assert name in denied, name
+    for sub in ("rollout restart", "rollout undo", "rollout pause", "rollout resume"):
+        assert sub in denied
+    assert "auth reconcile" in denied
+
+
+def test_copilot_default_output_evals_to_the_same_arguments():
+    script = CONFIG / "copilot-deny-tools.sh"
+    done = subprocess.run(
+        ["bash", "-c", f'eval "flags=($(bash {script}))"; printf "%s\\n" "${{flags[@]}}"'],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert done.stdout == copilot_args("--lines")
+
+
+def test_copilot_run_starts_copilot_with_the_rules(tmp_path):
+    fake = tmp_path / "copilot"
+    fake.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n')
+    fake.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    out = copilot_args("--run", "--agent", "my-agent", env=env)
+    assert out == copilot_args("--lines") + "--agent\nmy-agent\n"
