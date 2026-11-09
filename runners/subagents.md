@@ -1,0 +1,59 @@
+# Subagent runner
+
+The default mode: investigators run as subagents inside the user's own Claude Code or
+GitHub Copilot CLI session. They use the `k8s-crew-investigator` agent definition, which
+has read-only tools only (shell, read, search) and cannot edit files or start agents.
+
+Investigators share the boss's process, shell and files, so they have the same
+view-only kubeconfig the boss checked with `scripts/preflight.sh`. Nothing extra is
+needed for their identity.
+
+## Before you start
+
+- **The agent definition must be installed.** `scripts/preflight.sh --subagents
+  --platform claude` (or `--platform copilot`) checks it. If it is missing, tell the
+  user to run `scripts/install-agents.sh` and stop. Never fall back to a general-purpose
+  subagent: it would lose the tool limits.
+- **Plan mode.** In Claude Code, a session in plan mode keeps every subagent in plan
+  mode, so investigators would write plans instead of findings. If the session is in
+  plan mode, ask the user to switch to normal mode (Shift+Tab) and run the crew again.
+  Start crew sessions in normal mode.
+- **Permission prompts** from investigators show up in the user's session. They are the
+  user's to answer. Investigators cannot ask the user questions; if one needs something
+  it cannot see, it says so in its reply.
+
+## Claude Code
+
+Start one investigator per issue with the Agent tool, `subagent_type:
+"k8s-crew-investigator"`. Put all the Agent calls in **one message** so they run in
+parallel, then wait for all of them. Each `prompt` is the investigator's task from
+step 2 of the recipe: the issue, object and namespace, triage's evidence, the specialist
+skill and its `SKILL.md` path if known, and "Reply in the shape from your instructions:
+Finding, Evidence, Confidence, Proposed fixes."
+
+Up to 3 investigators by default, 4 at most.
+
+Docs: https://code.claude.com/docs/en/sub-agents.md
+
+## Copilot CLI
+
+Start one investigator per issue as the custom agent `k8s-crew-investigator` (the
+`task` tool with that agent, or "use the k8s-crew-investigator agent to ..."). Start
+them in parallel and wait for all of them. The task text is the same as for Claude
+Code.
+
+Up to 2 investigators by default: Copilot Free runs 2 subagents at a time (Pro 4,
+Business 16, Enterprise 32). Use more only when the user says their plan allows it, and
+never more than 4.
+
+Copilot CLI applies the session's `--deny-tool` rules to subagents too, so the rules
+from `config/copilot-deny-tools.sh` cover investigators.
+
+Docs: https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/create-custom-agents-for-cli
+
+## When an investigator fails
+
+- **No reply, or an error:** report the issue with triage's evidence only, mark it
+  `not sure`, and say under `## Helper details` that the investigator did not finish.
+  Do not start it again without asking the user.
+- **A reply in another shape:** use what is there, say so under `## Helper details`.

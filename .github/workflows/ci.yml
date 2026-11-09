@@ -29,6 +29,7 @@ jobs:
       - run: ruff check --output-format=github .
       - run: ruff format --check .
       - run: pytest
+      - run: python -m tools.crewcheck check
 
   markdown:
     name: markdown

@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(kubectl apply *)",
+      "Bash(kubectl create *)",
+      "Bash(kubectl delete *)",
+      "Bash(kubectl edit *)",
+      "Bash(kubectl patch *)",
+      "Bash(kubectl replace *)",
+      "Bash(kubectl scale *)",
+      "Bash(kubectl set *)",
+      "Bash(kubectl rollout restart *)",
+      "Bash(kubectl rollout undo *)",
+      "Bash(kubectl cordon *)",
+      "Bash(kubectl uncordon *)",
+      "Bash(kubectl drain *)",
+      "Bash(kubectl taint *)",
+      "Bash(kubectl label *)",
+      "Bash(kubectl annotate *)",
+      "Bash(kubectl exec *)",
+      "Bash(kubectl cp *)",
+      "Bash(kubectl port-forward *)",
+      "Bash(kubectl debug *)",
+      "Bash(kubectl get secret*)"
+    ]
+  }
+}
