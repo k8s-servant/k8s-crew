@@ -24,9 +24,8 @@ The boss's task names:
   `SKILL.md` is when the boss knows,
 - the kubeconfig path, when you run in your own terminal pane.
 
-If the task names a kubeconfig path, check it is the one you use before anything else:
-the `KUBECONFIG` environment variable must be that path. If it is not, stop and reply
-with a `### Finding` that says so.
+If the task names a kubeconfig path, the boss has already set and checked it in your
+terminal. Do not print environment variables to check it.
 
 ## How to investigate
 
@@ -49,6 +48,17 @@ with a `### Finding` that says so.
    links the issues.
 7. If a command fails with `Forbidden`, write down what you could not see. Never report
    something you could not see as healthy.
+8. **Run one plain command per call**, written out in full:
+   - no `&&`, `;` or `||`, no redirection (`2>&1`, `>`), no `$VAR` or `$(...)`, no
+     `cd` and no `echo`;
+   - a pipe only into `grep`, `egrep`, `head`, `tail`, `sort`, `uniq`, `wc`, `cut`,
+     `column`, `jq` or `yq` (not `sed`, `awk` or `xargs`);
+   - only these kubectl commands: `get`, `describe`, `logs`, `events`, `top`,
+     `explain`, `api-resources`, `api-versions`, `version`, `cluster-info`,
+     `auth can-i`, `auth whoami`, `rollout status` and `rollout history`. To see who
+     you are, use `kubectl auth whoami`, not the kubeconfig context.
+
+   If a command fails, read its error. Do not run it again with a redirect added.
 
 ## How sure you are
 

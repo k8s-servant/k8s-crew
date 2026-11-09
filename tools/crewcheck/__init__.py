@@ -71,6 +71,8 @@ HERDR_PROMPT_RULES = (
     "### Proposed fixes",
     "roles/investigator.md",
     "if you cannot read",
+    "one plain command per call",
+    "pipe only into grep",
 )
 
 

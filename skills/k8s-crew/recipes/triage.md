@@ -15,6 +15,16 @@ Rules for the whole run:
 - **Trust prompts, permission prompts and investigator questions go to the user.** The
   boss never answers them.
 - **"Not sure" is better than a guess.** A wrong answer is worse than an incomplete one.
+- **One plain command per call**, for the boss and every investigator:
+  - no `&&`, `;` or `||`, no redirection (`2>&1`, `>`), no `$VAR` or `$(...)`, no `cd`
+    and no `echo`. Run scripts by their full path;
+  - a pipe only into `grep`, `egrep`, `head`, `tail`, `sort`, `uniq`, `wc`, `cut`,
+    `column`, `jq` or `yq` (not `sed`, `awk` or `xargs`);
+  - only these kubectl commands: `get`, `describe`, `logs`, `events`, `top`,
+    `explain`, `api-resources`, `api-versions`, `version`, `cluster-info`,
+    `auth can-i`, `auth whoami`, `rollout status` and `rollout history`. Use
+    `kubectl auth whoami` to see the identity, not the kubeconfig context. When
+    `kubectl top` fails, write "metrics not available" and go on.
 
 ## 1. Sweep
 

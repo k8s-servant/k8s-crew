@@ -249,6 +249,8 @@ def test_crew_line_chained_to_other_program_is_found(tmp_path):
         "### Proposed fixes",
         "roles/investigator.md",
         "if you cannot read",
+        "one plain command per call",
+        "pipe only into grep",
     ],
 )
 def test_herdr_prompt_has_hard_rules_inline(tmp_path, needle):
