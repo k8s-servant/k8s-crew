@@ -495,3 +495,38 @@ def test_agents_are_told_the_command_shapes_the_check_reads(rel):
     text = (ROOT / rel).read_text(encoding="utf-8")
     assert "`-o name`" in text and "`-o wide`" in text
     assert "no file arguments" in text
+
+
+EVIDENCE_RULES = {
+    RECIPE: [
+        "**Scoped tasks.**",
+        "**Confirmed needs shown evidence.**",
+        "**Timestamps are not history.**",
+        "**Fix the cause, not its effects.**",
+    ],
+    ROLE: [
+        "**No speculative weaknesses.**",
+        "**Confirmed needs shown evidence.**",
+        "**Timestamps are not history.**",
+        "**Fix the cause, not its effects.**",
+    ],
+}
+
+
+@network
+@pytest.mark.parametrize(
+    ("rel", "needle"), [(rel, n) for rel, needles in EVIDENCE_RULES.items() for n in needles]
+)
+def test_evidence_discipline_rules_are_required(tmp_path, rel, needle):
+    repo = make_repo(tmp_path)
+    path = repo / rel
+    text = path.read_text(encoding="utf-8")
+    assert needle in text
+    path.write_text(text.replace(needle, "x"), encoding="utf-8")
+    assert any(m.startswith(rel) and needle in m for m in messages(repo))
+
+
+def test_herdr_prompt_carries_the_evidence_rules():
+    text = (ROOT / HERDR).read_text(encoding="utf-8")
+    for rule in ("no speculative weaknesses", "confirmed only", "never a knock-on effect"):
+        assert rule in text, rule

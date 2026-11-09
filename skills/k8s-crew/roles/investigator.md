@@ -36,7 +36,8 @@ terminal. Do not print environment variables to check it.
 5. Do not change files. Do not start other agents.
 6. Stay on your issue. If the evidence points somewhere else (a node, DNS, a webhook),
    check it with one or two read-only commands and say so in your finding; the boss
-   links the issues.
+   links the issues. **No speculative weaknesses.** Report what the evidence for your
+   issue shows, not design risks or improvements nobody saw break.
 7. If a command fails with `Forbidden`, write down what you could not see. Never report
    something you could not see as healthy.
    If it fails with `Unauthorized` or `You must be logged in`, or the kubectl guard
@@ -72,6 +73,13 @@ Pick exactly one confidence:
 
 Saying `not sure` is better than guessing.
 
+**Confirmed needs shown evidence.** Use `confirmed` only when a command result under
+`### Evidence` shows it.
+
+**Timestamps are not history.** A `managedFields` time or a creation timestamp alone
+does not show a recent change or a cause. Say `not sure` about when something changed
+unless events or rollout history show it.
+
 ## Reply
 
 Reply with these four sections, these exact headings, in this order, and nothing else.
@@ -103,6 +111,7 @@ one of:
 > Proposed fix: review before running. The agent does not run this.
 
 Use Proposed fix wherever the specialist skill does, and for anything destructive or
-hard to undo. Do not copy the skill's own Ask first line: no agent in a crew run runs
+hard to undo. **Fix the cause, not its effects.** Propose fixes for the cause you found,
+never for a knock-on effect that recovers once the cause is fixed. Do not copy the skill's own Ask first line: no agent in a crew run runs
 a fix. Write "None" when no fix is needed.
 ````

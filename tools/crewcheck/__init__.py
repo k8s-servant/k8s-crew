@@ -65,6 +65,28 @@ REQUIRED_TEXT = {
             "must state the rule **Trigger, not precondition.** for the root cause",
         ),
         ("One issue, one section.", "must state the rule One issue, one section."),
+        ("**Scoped tasks.**", "must state the rule **Scoped tasks.**"),
+        (
+            "**Confirmed needs shown evidence.**",
+            "must state the rule **Confirmed needs shown evidence.**",
+        ),
+        ("**Timestamps are not history.**", "must state the rule **Timestamps are not history.**"),
+        (
+            "**Fix the cause, not its effects.**",
+            "must state the rule **Fix the cause, not its effects.**",
+        ),
+    ),
+    ROLE: (
+        ("**No speculative weaknesses.**", "must state the rule **No speculative weaknesses.**"),
+        (
+            "**Confirmed needs shown evidence.**",
+            "must state the rule **Confirmed needs shown evidence.**",
+        ),
+        ("**Timestamps are not history.**", "must state the rule **Timestamps are not history.**"),
+        (
+            "**Fix the cause, not its effects.**",
+            "must state the rule **Fix the cause, not its effects.**",
+        ),
     ),
     HERDR_RUNNER: (
         ("agent_prompt_stalled", "must say what to do on agent_prompt_stalled (never resend)"),

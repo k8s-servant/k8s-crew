@@ -69,6 +69,10 @@ Pick the top issues from the ranked list and start one investigator per issue:
   `k8s-coredns-troubleshooting`, `k8s-storage-troubleshooting`) and the path of its
   `SKILL.md` if you know it, and the reply shape from `roles/investigator.md`.
 
+- **Scoped tasks.** Ask each investigator only about its issue and the evidence for
+  it. Never ask it to note design weaknesses, risks or improvements: a weakness nobody
+  saw break is not a finding.
+
 If only one issue is found, one investigator is enough. If the specialist skill for an
 issue is not installed, do not start an investigator for it: report the issue with
 triage's evidence and first fix, and say which skill to install.
@@ -107,6 +111,11 @@ Link the findings into one picture:
   not show it, lower the confidence and say why.
 - **Disagreements.** When investigators disagree, check the disputed point yourself with
   a read-only command, say which one you believe and why.
+- **Confirmed needs shown evidence.** Call something `confirmed` only when a command
+  result in the report's evidence shows it; otherwise `likely` or `not sure`.
+- **Timestamps are not history.** A `managedFields` time or a creation timestamp alone
+  does not show that something changed recently or caused the fault. Say `not sure`
+  about when it changed unless events or rollout history show it.
 - **Thin evidence** gets `not sure`, with what would settle it. Never upgrade a
   `not sure` from an investigator to `confirmed` without your own evidence.
 
@@ -140,6 +149,11 @@ marker line is exactly one of:
 > Ask first: changes the cluster. Run it yourself after review.
 
 > Proposed fix: review before running. The agent does not run this.
+
+**Fix the cause, not its effects.** Fixes target the root cause and genuinely separate
+issues, never a knock-on effect: those recover when the cause is fixed (do not scale or
+restart an app that only fails because of the root cause). A follow-up for a
+precondition comes after the fix for the root cause.
 
 Use Proposed fix for anything destructive or hard to undo, which needs extra review,
 and wherever the specialist skill uses it. Do not copy the specialist skill's own Ask
