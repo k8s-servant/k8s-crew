@@ -14,15 +14,35 @@ while [[ $# -gt 0 ]]; do
 done
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-kubectl apply -f "$here/../rbac/crew-viewer.yaml" >&2
 
-token="$(kubectl create token crew-viewer -n k8s-crew --duration 8h)"
-server="$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.server}')"
-ca_data="$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')"
-if [[ -z "$ca_data" ]]; then
-  ca_file="$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority}')"
-  [[ -n "$ca_file" && -r "$ca_file" ]] && ca_data="$(base64 < "$ca_file" | tr -d '\n')"
+# The current context's cluster entry. --flatten inlines a CA given as a file path (a
+# relative path is resolved against the kubeconfig's own folder, as kubectl does), so
+# the viewer kubeconfig needs no file next to it.
+cluster() {
+  kubectl config view --raw --minify --flatten -o "jsonpath={.clusters[0].cluster.$1}"
+}
+server="$(cluster server)"
+ca_data="$(cluster certificate-authority-data)"
+tls_server_name="$(cluster tls-server-name)"
+proxy_url="$(cluster proxy-url)"
+insecure="$(cluster insecure-skip-tls-verify)"
+if [[ -z "$server" ]]; then
+  echo "viewer-kubeconfig.sh: the current context has no cluster server" >&2
+  exit 3
 fi
+if [[ "$server" == https://* && -z "$ca_data" ]]; then
+  if [[ "$insecure" != true ]]; then
+    echo "viewer-kubeconfig.sh: the current context has no CA for $server (no" \
+      "certificate-authority-data or certificate-authority), so the viewer kubeconfig" \
+      "could not verify the server. Fix the cluster entry of your kubeconfig first." >&2
+    exit 3
+  fi
+  echo "WARNING: the current context sets insecure-skip-tls-verify and has no CA; the" \
+    "viewer kubeconfig keeps it and will not verify the server's certificate." >&2
+fi
+
+kubectl apply -f "$here/../rbac/crew-viewer.yaml" >&2
+token="$(kubectl create token crew-viewer -n k8s-crew --duration 8h)"
 
 mkdir -p "$(dirname "$out")"
 umask 077
@@ -36,6 +56,9 @@ trap 'rm -f "$draft"' EXIT
   echo "  cluster:"
   echo "    server: $server"
   [[ -n "$ca_data" ]] && echo "    certificate-authority-data: $ca_data"
+  [[ -z "$ca_data" && "$insecure" == true ]] && echo "    insecure-skip-tls-verify: true"
+  [[ -n "$tls_server_name" ]] && echo "    tls-server-name: $tls_server_name"
+  [[ -n "$proxy_url" ]] && echo "    proxy-url: $proxy_url"
   echo "users:"
   echo "- name: crew-viewer"
   echo "  user:"

@@ -17,20 +17,39 @@ SCRIPTS = SKILL / "scripts"
 FAKE_KUBECTL = """#!/usr/bin/env bash
 echo "kubectl $*" >> "$FAKE_LOG"
 case "$1 $2" in
-  "auth can-i") echo "${FAKE_CAN_I:-no}"; [[ "${FAKE_CAN_I:-no}" == "no" ]] && exit 1 || exit 0 ;;
+  "auth can-i")
+    if [[ -n "${FAKE_CAN_I_ERR:-}" ]]; then echo "$FAKE_CAN_I_ERR" >&2; exit 1; fi
+    answer="${FAKE_CAN_I:-no}"
+    IFS='|' read -ra yes <<< "${FAKE_YES:-}"
+    for pattern in "${yes[@]}"; do
+      [[ -n "$pattern" && "$*" == *"$pattern"* ]] && answer=yes
+    done
+    echo "$answer"; [[ "$answer" == yes ]] && exit 0 || exit 1 ;;
+  "get namespaces")
+    if [[ -n "${FAKE_NS_ERR:-}" ]]; then echo "$FAKE_NS_ERR" >&2; exit 1; fi
+    echo "${FAKE_NAMESPACES-default my-namespace}" ;;
   "create token") echo "fake-token-value" ;;
   "config view")
     case "$*" in
-      *cluster.server*) echo "https://example.com:6443" ;;
-      *certificate-authority-data*) echo "RkFLRS1DQQ==" ;;
+      *--flatten*) ;;
+      *) echo "config view without --flatten" >&2; exit 9 ;;
+    esac
+    case "$*" in
+      *cluster.server*) echo "${FAKE_SERVER-https://example.com:6443}" ;;
+      *certificate-authority-data*) echo "${FAKE_CA-RkFLRS1DQQ==}" ;;
+      *tls-server-name*) echo "${FAKE_TLS_NAME:-}" ;;
+      *proxy-url*) echo "${FAKE_PROXY:-}" ;;
+      *insecure-skip-tls-verify*) echo "${FAKE_INSECURE:-}" ;;
       *) echo "client-certificate-data: FAKE-ADMIN-CERT" ;;
     esac ;;
 esac
 exit 0
 """
+GUARD = SCRIPTS / "kubectl-guard"
 
 
-def make_env(tmp_path, can_i="no"):
+def make_env(tmp_path, can_i="no", guard=True):
+    """A fake kubectl and throwaway HOME; with ``guard``, the crew guard first on PATH."""
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     kubectl = bindir / "kubectl"
@@ -46,6 +65,21 @@ def make_env(tmp_path, can_i="no"):
         FAKE_CAN_I=can_i,
     )
     env.pop("KUBECONFIG", None)
+    env.pop("K8S_CREW_GUARD", None)
+    if guard:
+        viewer = tmp_path / "viewer.kubeconfig"
+        viewer.write_text("fake viewer")
+        guard_bin = tmp_path / "guard"
+        guard_bin.mkdir(exist_ok=True)
+        subprocess.run(
+            ["bash", str(GUARD), "install", str(guard_bin), str(viewer)], env=env, check=True
+        )
+        guard_bin = guard_bin.resolve()
+        env.update(
+            PATH=f"{guard_bin}:{env['PATH']}",
+            KUBECONFIG=str(viewer),
+            K8S_CREW_GUARD=str(guard_bin),
+        )
     return env, home
 
 
@@ -89,10 +123,110 @@ def test_preflight_accepts_viewer(tmp_path):
     assert "viewer ok" in res.stdout
 
 
-def test_preflight_fails_closed_on_error(tmp_path):
-    env, _ = make_env(tmp_path, can_i="error: unable to connect")
+def test_preflight_fails_closed_on_unexpected_answer(tmp_path):
+    env, _ = make_env(tmp_path, can_i="maybe")
     res = run("preflight.sh", [], env)
     assert res.returncode == 3
+    assert "NOT view-only" in res.stdout
+
+
+@pytest.mark.parametrize(
+    "answer", ["no - RBAC: access denied", "no - Azure does not have opinion for this user."]
+)
+def test_preflight_accepts_denial_with_reason(tmp_path, answer):
+    env, _ = make_env(tmp_path, can_i=answer)
+    res = run("preflight.sh", [], env)
+    assert res.returncode == 0, res.stdout
+    assert "viewer ok" in res.stdout
+
+
+@pytest.mark.parametrize("answer", ["no -", "nope", "no\nyes", "no - x\nyes"])
+def test_preflight_refuses_near_denials(tmp_path, answer):
+    env, _ = make_env(tmp_path, can_i=answer.replace("\\n", "\n"))
+    res = run("preflight.sh", [], env)
+    assert res.returncode == 3, res.stdout
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "error: You must be logged in to the server (Unauthorized)",
+        "Unable to connect to the server: dial tcp 192.0.2.1:6443: i/o timeout",
+    ],
+)
+def test_preflight_reports_check_errors_apart(tmp_path, error):
+    env, _ = make_env(tmp_path)
+    env["FAKE_CAN_I_ERR"] = error
+    res = run("preflight.sh", [], env)
+    assert res.returncode == 5, res.stdout
+    assert f"cannot check identity: can-i create deployments -A: {error}" in res.stdout
+    assert "NOT view-only" not in res.stdout
+    assert "viewer-kubeconfig.sh" in res.stdout
+
+
+def test_preflight_write_wins_over_errors(tmp_path):
+    env, _ = make_env(tmp_path)
+    env["FAKE_YES"] = "patch nodes"
+    env["FAKE_NS_ERR"] = "error: forbidden"
+    res = run("preflight.sh", [], env)
+    assert res.returncode == 3, res.stdout
+
+
+@pytest.mark.parametrize(
+    "grant",
+    ["create deployments -n my-namespace", "delete pods -n my-namespace", "get secrets -n default"],
+)
+def test_preflight_refuses_namespace_scoped_access(tmp_path, grant):
+    env, _ = make_env(tmp_path)
+    env["FAKE_YES"] = grant
+    res = run("preflight.sh", [], env)
+    assert res.returncode == 3, res.stdout
+    assert f"NOT view-only: can-i {grant} answered 'yes'" in res.stdout
+
+
+def test_preflight_checks_every_namespace(tmp_path):
+    env, _ = make_env(tmp_path)
+    res = run("preflight.sh", [], env)
+    assert res.returncode == 0, res.stdout
+    log = (tmp_path / "log").read_text()
+    for ns in ("default", "my-namespace"):
+        for check in ("create deployments", "delete pods", "get secrets"):
+            assert f"kubectl auth can-i {check} -n {ns}" in log
+
+
+@pytest.mark.parametrize("names", ["", None])
+def test_preflight_namespace_listing_failure_is_an_error(tmp_path, names):
+    env, _ = make_env(tmp_path)
+    if names is None:
+        env["FAKE_NS_ERR"] = "error: You must be logged in to the server (Unauthorized)"
+    else:
+        env["FAKE_NAMESPACES"] = names
+    res = run("preflight.sh", [], env)
+    assert res.returncode == 5, res.stdout
+    assert "cannot check identity" in res.stdout
+
+
+def test_preflight_needs_the_guard(tmp_path):
+    env, _ = make_env(tmp_path, guard=False)
+    res = run("preflight.sh", [], env)
+    assert res.returncode == 6
+    assert "crew-start.sh" in res.stdout
+    assert not (tmp_path / "log").exists()
+
+
+def test_preflight_needs_the_guard_first_on_path(tmp_path):
+    env, _ = make_env(tmp_path)
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    res = run("preflight.sh", [], env)
+    assert res.returncode == 6
+
+
+def test_preflight_refuses_a_kubeconfig_list(tmp_path):
+    env, _ = make_env(tmp_path)
+    env["KUBECONFIG"] = f"{env['KUBECONFIG']}:{tmp_path / 'admin'}"
+    res = run("preflight.sh", [], env)
+    assert res.returncode == 5, res.stdout
+    assert "k8s-crew kubectl guard" in res.stdout
 
 
 def test_preflight_needs_agent_for_subagents(tmp_path):
@@ -135,7 +269,7 @@ def test_install_agents_keeps_user_file(tmp_path):
 
 
 def test_viewer_kubeconfig_writes_token_only_file(tmp_path):
-    env, _ = make_env(tmp_path)
+    env, _ = make_env(tmp_path, guard=False)
     out = tmp_path / "viewer.kubeconfig"
     res = run("viewer-kubeconfig.sh", ["--out", str(out)], env)
     assert res.returncode == 0, res.stderr
@@ -149,6 +283,53 @@ def test_viewer_kubeconfig_writes_token_only_file(tmp_path):
     log = (tmp_path / "log").read_text()
     assert "create token crew-viewer -n k8s-crew --duration 8h" in log
     assert "apply -f" in log
+    # --flatten inlines a CA given as a file path, also a relative one.
+    assert "config view --raw --minify --flatten" in log
+    assert "tls-server-name" not in out.read_text()
+    assert "proxy-url" not in out.read_text()
+
+
+def viewer_kubeconfig(tmp_path, **fake):
+    env, _ = make_env(tmp_path, guard=False)
+    env.update(fake)
+    out = tmp_path / "viewer.kubeconfig"
+    return run("viewer-kubeconfig.sh", ["--out", str(out)], env), out
+
+
+def test_viewer_kubeconfig_carries_tls_server_name_and_proxy(tmp_path):
+    res, out = viewer_kubeconfig(
+        tmp_path, FAKE_TLS_NAME="api.example.com", FAKE_PROXY="http://proxy.example.com:3128"
+    )
+    assert res.returncode == 0, res.stderr
+    text = out.read_text()
+    assert "    tls-server-name: api.example.com\n" in text
+    assert "    proxy-url: http://proxy.example.com:3128\n" in text
+
+
+def test_viewer_kubeconfig_refuses_https_without_ca(tmp_path):
+    res, out = viewer_kubeconfig(tmp_path, FAKE_CA="")
+    assert res.returncode == 3
+    assert "no CA" in res.stderr
+    assert not out.exists()
+
+
+def test_viewer_kubeconfig_keeps_insecure_skip_loudly(tmp_path):
+    res, out = viewer_kubeconfig(tmp_path, FAKE_CA="", FAKE_INSECURE="true")
+    assert res.returncode == 0, res.stderr
+    assert "WARNING" in res.stderr
+    assert "    insecure-skip-tls-verify: true\n" in out.read_text()
+
+
+def test_viewer_kubeconfig_plain_http_needs_no_ca(tmp_path):
+    res, out = viewer_kubeconfig(tmp_path, FAKE_CA="", FAKE_SERVER="http://127.0.0.1:8080")
+    assert res.returncode == 0, res.stderr
+    assert "certificate-authority-data" not in out.read_text()
+
+
+def test_viewer_kubeconfig_refuses_no_server(tmp_path):
+    res, out = viewer_kubeconfig(tmp_path, FAKE_SERVER="")
+    assert res.returncode == 3
+    assert not out.exists()
 
 
 def test_preflight_finds_claude_agent_in_project(tmp_path):

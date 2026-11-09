@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
-# Refuse to start unless the current kubectl identity is view-only. Fails closed:
-# a "yes" or any answer other than "no" (error, no cluster) blocks the crew.
+# Refuse to start the crew unless the session is held to the view-only identity.
+# Fails closed: anything it cannot positively confirm blocks the crew.
+#
+# Exit codes (SKILL.md tells the boss what to say for each):
+#   0  viewer ok
+#   2  bad arguments
+#   3  NOT view-only: some can-i check answered something other than a denial
+#   4  investigator agent missing (with --subagents)
+#   5  cannot check identity: kubectl failed (expired token, unreachable cluster, the
+#      kubectl guard refused the call)
+#   6  kubectl guard not active: the session was not started with scripts/crew-start.sh
 set -euo pipefail
 
 subagents=false
@@ -13,13 +22,36 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# The kubectl guard (scripts/kubectl-guard, put first on PATH by scripts/crew-start.sh)
+# is what keeps every agent in the session on the viewer kubeconfig: without it, a
+# kubectl --kubeconfig or --context flag reaches any other kubeconfig on the machine.
+if [[ -z "${K8S_CREW_GUARD:-}" || "$(command -v kubectl || true)" != "$K8S_CREW_GUARD/kubectl" ]]
+then
+  echo "kubectl guard not active: this session was not started with scripts/crew-start.sh."
+  echo "Without it, any other kubeconfig on this machine (your admin one) is reachable."
+  echo "Start a new session with <skill-dir>/scripts/crew-start.sh claude (or copilot)."
+  exit 6
+fi
+
+errfile="$(mktemp)"
+trap 'rm -f "$errfile"' EXIT
+nl=$'\n'
+# A denial is "no", or "no - <reason>" when the authorizer gives one (webhook
+# authorizers such as AKS Azure RBAC do). One line only.
+denial="^no( - [^${nl}]+)?$"
 blocked=0
+errors=0
 check() {
   local label="$1"; shift
   local answer
-  answer="$(kubectl auth can-i "$@" 2>/dev/null || true)"
-  if [[ "$answer" != "no" ]]; then
-    echo "NOT view-only: can-i $label answered '${answer:-no answer}'"
+  answer="$(kubectl auth can-i "$@" 2>"$errfile" || true)"
+  if [[ "$answer" =~ $denial ]]; then
+    return 0
+  elif [[ -z "$answer" ]]; then
+    echo "cannot check identity: can-i $label: $(head -n 1 "$errfile" || true)"
+    errors=1
+  else
+    echo "NOT view-only: can-i $label answered '$answer'"
     blocked=1
   fi
 }
@@ -28,9 +60,44 @@ check "delete pods -A" delete pods -A
 check "patch nodes" patch nodes
 check "get secrets -A" get secrets -A
 
+# The checks above ask about cluster scope only (-A asks for every namespace at once,
+# which only a ClusterRoleBinding grants). A RoleBinding gives rights in one namespace,
+# so an identity with cluster-wide view plus edit or Secret read in a few namespaces
+# passes them. So the same questions are asked again in every namespace the identity
+# can list. `can-i --list` is not used: it relies on SelfSubjectRulesReview, which
+# webhook authorizers (AKS Azure RBAC) answer incompletely, so it would miss rights and
+# fail open. Explicit checks are authoritative; they cost three API calls per namespace,
+# once per session. The loop stops at the first namespace with a problem.
+if [[ "$blocked" -eq 0 && "$errors" -eq 0 ]]; then
+  if ! namespaces="$(kubectl get namespaces -o 'jsonpath={.items[*].metadata.name}' \
+    2>"$errfile")"; then
+    echo "cannot check identity: get namespaces: $(head -n 1 "$errfile" || true)"
+    errors=1
+  elif [[ -z "${namespaces// /}" ]]; then
+    echo "cannot check identity: get namespaces listed no namespace"
+    errors=1
+  else
+    for ns in $namespaces; do
+      check "create deployments -n $ns" create deployments -n "$ns"
+      check "delete pods -n $ns" delete pods -n "$ns"
+      check "get secrets -n $ns" get secrets -n "$ns"
+      [[ "$blocked" -eq 0 && "$errors" -eq 0 ]] || break
+    done
+  fi
+fi
+
 if [[ "$blocked" -ne 0 ]]; then
-  echo "run scripts/viewer-kubeconfig.sh and export KUBECONFIG=<path>"
+  echo "This identity can change the cluster or read Secrets. Create the viewer"
+  echo "kubeconfig with scripts/viewer-kubeconfig.sh and start a new session with"
+  echo "scripts/crew-start.sh."
   exit 3
+fi
+if [[ "$errors" -ne 0 ]]; then
+  echo "Could not check the identity: the cluster is unreachable, the viewer token has"
+  echo "expired (it lasts 8 hours), or the kubectl guard refused the call. Run"
+  echo "scripts/viewer-kubeconfig.sh again in your own terminal, then start a new"
+  echo "session with scripts/crew-start.sh."
+  exit 5
 fi
 
 # Folders from $PWD up to the git root (only $PWD outside a git repository), nearest first.
