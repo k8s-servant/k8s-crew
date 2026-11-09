@@ -50,11 +50,17 @@ never more than 4.
 
 Copilot CLI applies the session's `--allow-tool` and `--deny-tool` rules to subagents
 too. The user starts the session with `config/copilot-deny-tools.sh --run` (by its full
-path, in place of `copilot`; any further arguments go to `copilot`). It allows kubectl
-and denies every kubectl command that is not read-only, and Secret reads. Copilot rules
-match only a command's leading words: an allow rule cannot name a subcommand, and
-flags such as `--context` or `--kubeconfig` cannot be denied. The view-only identity is
-what blocks writes and other clusters.
+path, in place of `copilot`; any further arguments go to `copilot`). It denies every
+kubectl command that is not read-only, and Secret reads, and allows nothing: Copilot
+asks the user before each other kubectl call, and those prompts are the user's to
+answer. Copilot rules match only a command's leading words: an allow rule cannot name
+a subcommand, and a flag written before the subcommand (`-n my-namespace`,
+`--context` or `--kubeconfig` before `delete`) is not matched by any deny rule.
+
+`config/copilot-deny-tools.sh --auto-allow --run` also allows every kubectl call, so
+investigators run without prompts. Then a flag before the subcommand gets past the
+deny list and **only the view-only identity protects the cluster**. Use `--auto-allow`
+only with the crew viewer kubeconfig.
 
 Docs: https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/create-custom-agents-for-cli
 

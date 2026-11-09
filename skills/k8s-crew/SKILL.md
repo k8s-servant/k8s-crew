@@ -112,4 +112,8 @@ Example rules that block kubectl write commands as a second line of defence are 
 `config/claude-settings.example.json` (Claude Code) and `config/copilot-deny-tools.sh`
 (Copilot CLI; start the session with `config/copilot-deny-tools.sh --run`). They are a
 safety net that cannot match every form of a command (Copilot cannot deny flags at
-all); the view-only identity is the real lock.
+all); the view-only identity is the real lock. The Copilot rules are deny-only, so
+Copilot asks before each other kubectl call. With `--auto-allow`, kubectl runs without
+asking, and a flag before the subcommand (`-n`, `--context`) gets past the deny list:
+then only the view-only identity protects the cluster, so use it only with the crew
+viewer kubeconfig.

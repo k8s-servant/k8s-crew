@@ -138,7 +138,7 @@ claude_flags() {
 copilot_flags() {
   local project="$1" session="$2" verb tool flag dir
   # The deny script prints the flags shell-quoted, ready for eval.
-  eval "flags=($("$skill_dir/config/copilot-deny-tools.sh"))"
+  eval "flags=($("$skill_dir/config/copilot-deny-tools.sh" --auto-allow))"
   flags+=(
     --trust-folder --session-id "$session" --output-format json --no-ask-user
     --no-auto-update --disable-builtin-mcps --no-custom-instructions

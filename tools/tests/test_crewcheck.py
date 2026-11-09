@@ -322,11 +322,17 @@ def copilot_args(*args, env=None):
     return done.stdout
 
 
-def test_copilot_lines_have_no_quotes_and_pair_each_flag():
-    lines = copilot_args("--lines").splitlines()
+@pytest.mark.parametrize("auto", [False, True])
+def test_copilot_lines_have_no_quotes_and_pair_each_flag(auto):
+    prefix = ["--auto-allow"] if auto else []
+    lines = copilot_args(*prefix, "--lines").splitlines()
     assert not any(c in "".join(lines) for c in "'\"\\`$")
-    assert lines[:2] == ["--allow-tool", "shell(kubectl:*)"]
     pairs = list(zip(lines[::2], lines[1::2], strict=True))
+    allows = [rule for flag, rule in pairs if flag == "--allow-tool"]
+    # Deny-only unless auto-allow is chosen: flags before a subcommand bypass the denies.
+    assert allows == (["shell(kubectl:*)"] if auto else [])
+    if auto:
+        assert lines[:2] == ["--allow-tool", "shell(kubectl:*)"]
     assert all(flag in ("--allow-tool", "--deny-tool") for flag, _ in pairs)
     denied = {rule for flag, rule in pairs if flag == "--deny-tool"}
     for verb in WRITE_VERBS + ["get secret", "get secrets", "describe secret", "config"]:
@@ -343,7 +349,11 @@ def test_copilot_denies_every_kubectl_command_that_is_not_run_freely():
     allowlist = load_checker().allowlist
     run_freely = {c.split()[0] for c in allowlist["commands"]["kubectl"]}
     lines = copilot_args("--lines").splitlines()
-    denied = {r.removeprefix("shell(kubectl ").removesuffix(":*)") for r in lines[3::2]}
+    denied = {
+        rule.removeprefix("shell(kubectl ").removesuffix(":*)")
+        for flag, rule in zip(lines[::2], lines[1::2], strict=True)
+        if flag == "--deny-tool"
+    }
     for name in allowlist["kubectl_commands"]:
         if name not in run_freely and name != "help":
             assert name in denied, name
@@ -352,21 +362,24 @@ def test_copilot_denies_every_kubectl_command_that_is_not_run_freely():
     assert "auth reconcile" in denied
 
 
-def test_copilot_default_output_evals_to_the_same_arguments():
+@pytest.mark.parametrize("prefix", ["", "--auto-allow"])
+def test_copilot_default_output_evals_to_the_same_arguments(prefix):
     script = CONFIG / "copilot-deny-tools.sh"
     done = subprocess.run(
-        ["bash", "-c", f'eval "flags=($(bash {script}))"; printf "%s\\n" "${{flags[@]}}"'],
+        ["bash", "-c", f'eval "flags=($(bash {script} {prefix}))"; printf "%s\\n" "${{flags[@]}}"'],
         capture_output=True,
         text=True,
         check=True,
     )
-    assert done.stdout == copilot_args("--lines")
+    args = [prefix] if prefix else []
+    assert done.stdout == copilot_args(*args, "--lines")
 
 
-def test_copilot_run_starts_copilot_with_the_rules(tmp_path):
+@pytest.mark.parametrize("prefix", [[], ["--auto-allow"]])
+def test_copilot_run_starts_copilot_with_the_rules(tmp_path, prefix):
     fake = tmp_path / "copilot"
     fake.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n')
     fake.chmod(0o755)
     env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
-    out = copilot_args("--run", "--agent", "my-agent", env=env)
-    assert out == copilot_args("--lines") + "--agent\nmy-agent\n"
+    out = copilot_args(*prefix, "--run", "--agent", "my-agent", env=env)
+    assert out == copilot_args(*prefix, "--lines") + "--agent\nmy-agent\n"

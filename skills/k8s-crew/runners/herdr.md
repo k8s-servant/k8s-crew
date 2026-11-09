@@ -85,8 +85,12 @@ wait
 - **Copilot helpers** should get the permission rules. Run
   `<skill-dir>/config/copilot-deny-tools.sh --lines`: it prints one argument per line,
   with no quotes. Add each line after the `--`, in single quotes (the arguments
-  contain spaces and parentheses but never a quote). Copilot rules match only leading
-  words, so flags cannot be denied; the viewer identity set in step 4 is the lock.
+  contain spaces and parentheses but never a quote). The rules are deny-only, so the
+  helper asks before each other kubectl call; those prompts go to the user. With
+  `--auto-allow` (as `copilot-deny-tools.sh --auto-allow --lines`) kubectl runs without
+  asking, and a flag before the subcommand gets past the deny list, so only the viewer
+  identity set in step 4 protects the cluster. Use it only with the crew viewer
+  kubeconfig.
 
 If a start returns `agent_not_ready` (blocked during startup), it may only be loading:
 Copilot often reports this for a few seconds while it starts. Give it a 15-second grace
