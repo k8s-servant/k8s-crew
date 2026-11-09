@@ -16,6 +16,10 @@ Layout: everything the crew needs at run time lives in the one skill folder
 Paths in those files are relative to it. `tools/` and `tests/` stay at the repository
 root.
 
+The Claude Code plugin manifest is `.claude-plugin/plugin.json` (with `marketplace.json`);
+its `agents` path points into the skill folder. User docs: `README.md`, `docs/safety.md`,
+`docs/gotchas.md`, and the herdr release procedure in `docs/herdr-release-check.md`.
+
 ## Commands
 
 ```bash

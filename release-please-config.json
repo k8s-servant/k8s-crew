@@ -19,7 +19,10 @@
   "packages": {
     ".": {
       "initial-version": "0.1.0",
-      "package-name": "k8s-crew"
+      "package-name": "k8s-crew",
+      "extra-files": [
+        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
+      ]
     }
   }
 }
