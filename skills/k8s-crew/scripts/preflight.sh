@@ -69,24 +69,66 @@ candidates() {
   esac
 }
 
+# True when $1 is the root of a k8s-crew Claude Code plugin with the investigator in it.
+is_crew_plugin() {
+  local root="$1"
+  [[ -f "$root/skills/k8s-crew/agents/k8s-crew-investigator.md" ]] || return 1
+  grep -Eq '"name"[[:space:]]*:[[:space:]]*"k8s-crew"' "$root/.claude-plugin/plugin.json" \
+    2>/dev/null
+}
+
+# Roots of k8s-crew plugins Claude Code installed: the install paths it records, and the
+# plugin this script runs from when that is inside ~/.claude/plugins (a git clone also
+# has a plugin.json, but nothing installed it, so it does not count).
+plugin_roots() {
+  local record="$HOME/.claude/plugins/installed_plugins.json" own
+  if [[ -f "$record" ]]; then
+    grep -Eo '"installPath"[[:space:]]*:[[:space:]]*"[^"]*"' "$record" \
+      | sed -E 's/.*:[[:space:]]*"(.*)"$/\1/' || true
+  fi
+  own="$(cd "$here/../../.." && pwd -P)"
+  case "$own/" in
+    "$(cd "$HOME" && pwd -P)/.claude/plugins/"*) echo "$own" ;;
+  esac
+}
+
 if [[ "$subagents" == true ]]; then
   case "$platform" in
     claude|copilot) ;;
     *) echo "--subagents needs --platform claude|copilot" >&2; exit 2 ;;
   esac
   found=""
+  kind=""
   while IFS= read -r agent; do
     if [[ -e "$agent" ]]; then
       found="$agent"
+      case "$agent" in
+        "$HOME"/.claude/agents/*|"$HOME"/.copilot/agents/*) kind="user" ;;
+        *) kind="project" ;;
+      esac
       break
     fi
   done < <(candidates)
+  if [[ -z "$found" && "$platform" == claude ]]; then
+    here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+    while IFS= read -r root; do
+      if [[ -n "$root" ]] && is_crew_plugin "$root"; then
+        found="$root/skills/k8s-crew/agents/k8s-crew-investigator.md"
+        kind="plugin"
+        break
+      fi
+    done < <(plugin_roots)
+  fi
   if [[ -z "$found" ]]; then
     echo "investigator agent missing: not found in any $platform agent folder:"
     candidates | sed 's/^/  /'
+    [[ "$platform" == claude ]] && echo "  or a k8s-crew Claude Code plugin install"
     echo "run scripts/install-agents.sh"
     exit 4
   fi
+  name="k8s-crew-investigator"
+  [[ "$kind" == plugin ]] && name="k8s-crew:k8s-crew-investigator"
+  echo "investigator: $kind $name ($found)"
 fi
 
 echo "viewer ok"

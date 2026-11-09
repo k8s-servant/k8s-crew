@@ -11,7 +11,8 @@ needed for their identity.
 ## Before you start
 
 - **The agent definition must be installed.** `scripts/preflight.sh --subagents
-  --platform claude` (or `--platform copilot`) checks it. If it is missing, tell the
+  --platform claude` (or `--platform copilot`) checks it. In Claude Code it also accepts the
+  k8s-crew plugin, and prints which install it found. If it is missing, tell the
   user to run `scripts/install-agents.sh` and stop. Never fall back to a general-purpose
   subagent: it would lose the tool limits.
 - **Plan mode.** In Claude Code, a session in plan mode keeps every subagent in plan
@@ -24,8 +25,10 @@ needed for their identity.
 
 ## Claude Code
 
-Start one investigator per issue with the Agent tool, `subagent_type:
-"k8s-crew-investigator"`. Put all the Agent calls in **one message** so they run in
+Start one investigator per issue with the Agent tool. `subagent_type` is the name on
+the preflight's `investigator:` line: `"k8s-crew:k8s-crew-investigator"` when the
+investigator comes from the Claude Code plugin (`investigator: plugin ...`),
+`"k8s-crew-investigator"` otherwise. Put all the Agent calls in **one message** so they run in
 parallel, then wait for all of them. Each `prompt` is the investigator's task from
 step 2 of the recipe: the issue, object and namespace, triage's evidence, the specialist
 skill and its `SKILL.md` path if known, and "Run one plain read-only command per call

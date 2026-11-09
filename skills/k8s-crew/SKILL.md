@@ -65,7 +65,10 @@ Run it as one plain command: the script's full path and its flags, nothing chain
 before or after it, and no `echo` of the exit code. Read the exit code and the output
 from the tool result. Then:
 
-- **Exit 0, `viewer ok`:** carry on.
+- **Exit 0, `viewer ok`:** carry on. In subagent mode the output also has a line
+  `investigator: <where> <name> (<path>)`. Start investigators with that `<name>`:
+  `k8s-crew:k8s-crew-investigator` when `<where>` is `plugin` (the Claude Code plugin),
+  `k8s-crew-investigator` otherwise.
 - **Exit 3, `NOT view-only`:** stop. Show the user the script's output. The current
   identity can change the cluster, so the crew will not start. Tell them to create the
   viewer kubeconfig with `scripts/viewer-kubeconfig.sh` (an admin runs it once, in their

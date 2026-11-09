@@ -208,3 +208,113 @@ def test_preflight_agent_not_found_anywhere(tmp_path, platform):
     assert res.returncode == 4
     assert "investigator agent missing" in res.stdout
     assert "install-agents.sh" in res.stdout
+
+
+def make_plugin_install(home, with_manifest=True, record=True, name="k8s-crew"):
+    """A fake Claude Code plugin install of k8s-crew under HOME, as Claude Code lays it out."""
+    root = home / ".claude" / "plugins" / "cache" / "k8s-crew" / "k8s-crew" / "0.1.0"
+    agent = root / "skills" / "k8s-crew" / "agents" / "k8s-crew-investigator.md"
+    agent.parent.mkdir(parents=True)
+    agent.write_text("x")
+    if with_manifest:
+        (root / ".claude-plugin").mkdir()
+        (root / ".claude-plugin" / "plugin.json").write_text(f'{{"name": "{name}"}}\n')
+    if record:
+        (home / ".claude" / "plugins" / "installed_plugins.json").write_text(
+            '{"version": 2, "plugins": {"k8s-crew@k8s-crew": [{"scope": "user", '
+            f'"installPath": "{root}", "version": "0.1.0"}}]}}}}\n'
+        )
+    return root
+
+
+def test_preflight_names_user_install(tmp_path):
+    env, _ = make_env(tmp_path)
+    assert run("install-agents.sh", ["--claude"], env).returncode == 0
+    res = run("preflight.sh", ["--subagents", "--platform", "claude"], env, cwd=tmp_path)
+    assert res.returncode == 0, res.stdout
+    assert "investigator: user k8s-crew-investigator" in res.stdout
+
+
+def test_preflight_names_project_install(tmp_path):
+    env, _ = make_env(tmp_path)
+    project, work = make_project(tmp_path)
+    agents = project / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "k8s-crew-investigator.md").write_text("x")
+    res = run("preflight.sh", ["--subagents", "--platform", "claude"], env, cwd=work)
+    assert "investigator: project k8s-crew-investigator" in res.stdout
+
+
+def test_preflight_finds_claude_plugin_install(tmp_path):
+    env, home = make_env(tmp_path)
+    _project, work = make_project(tmp_path)
+    make_plugin_install(home)
+    res = run("preflight.sh", ["--subagents", "--platform", "claude"], env, cwd=work)
+    assert res.returncode == 0, res.stdout
+    assert "investigator: plugin k8s-crew:k8s-crew-investigator" in res.stdout
+    assert "viewer ok" in res.stdout
+
+
+def test_preflight_prefers_plain_install_over_plugin(tmp_path):
+    env, home = make_env(tmp_path)
+    make_plugin_install(home)
+    assert run("install-agents.sh", ["--claude"], env).returncode == 0
+    res = run("preflight.sh", ["--subagents", "--platform", "claude"], env, cwd=tmp_path)
+    assert "investigator: user k8s-crew-investigator" in res.stdout
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"with_manifest": False}, {"record": False}, {"name": "something-else"}],
+    ids=["no-plugin-json", "not-installed", "other-plugin"],
+)
+def test_preflight_rejects_incomplete_plugin_layout(tmp_path, kwargs):
+    env, home = make_env(tmp_path)
+    _project, work = make_project(tmp_path)
+    make_plugin_install(home, **kwargs)
+    res = run("preflight.sh", ["--subagents", "--platform", "claude"], env, cwd=work)
+    assert res.returncode == 4, res.stdout
+
+
+def test_preflight_copilot_ignores_claude_plugin(tmp_path):
+    env, home = make_env(tmp_path)
+    _project, work = make_project(tmp_path)
+    make_plugin_install(home)
+    res = run("preflight.sh", ["--subagents", "--platform", "copilot"], env, cwd=work)
+    assert res.returncode == 4
+
+
+def copy_skill_as_plugin(dest, with_manifest):
+    """A copy of the skill folder inside a plugin root, run from there."""
+    import shutil
+
+    shutil.copytree(SKILL, dest / "skills" / "k8s-crew")
+    if with_manifest:
+        (dest / ".claude-plugin").mkdir(parents=True)
+        (dest / ".claude-plugin" / "plugin.json").write_text('{"name": "k8s-crew"}\n')
+    return dest / "skills" / "k8s-crew" / "scripts" / "preflight.sh"
+
+
+@pytest.mark.parametrize("with_manifest", [True, False])
+def test_preflight_running_from_plugin_cache(tmp_path, with_manifest):
+    env, home = make_env(tmp_path)
+    _project, work = make_project(tmp_path)
+    root = home / ".claude" / "plugins" / "cache" / "my-marketplace" / "k8s-crew" / "abc123"
+    script = copy_skill_as_plugin(root, with_manifest)
+    args = ["bash", str(script), "--subagents", "--platform", "claude"]
+    res = subprocess.run(args, capture_output=True, text=True, env=env, cwd=work, check=False)
+    if with_manifest:
+        assert res.returncode == 0, res.stdout
+        assert "investigator: plugin k8s-crew:k8s-crew-investigator" in res.stdout
+    else:
+        assert res.returncode == 4, res.stdout
+
+
+def test_preflight_ignores_plugin_checkout_outside_claude_plugins(tmp_path):
+    # A git clone has .claude-plugin/plugin.json too, but nothing installed it.
+    env, _ = make_env(tmp_path)
+    _project, work = make_project(tmp_path)
+    script = copy_skill_as_plugin(tmp_path / "clone", with_manifest=True)
+    args = ["bash", str(script), "--subagents", "--platform", "claude"]
+    res = subprocess.run(args, capture_output=True, text=True, env=env, cwd=work, check=False)
+    assert res.returncode == 4, res.stdout
