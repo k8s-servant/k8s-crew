@@ -570,3 +570,18 @@ def test_role_and_skill_lines_are_wrapped():
         lines = (ROOT / rel).read_text(encoding="utf-8").splitlines()
         long = [n for n, line in enumerate(lines, 1) if len(line) > 92]
         assert not long, (rel, long)
+
+
+JQ_LIMITS = "no string interpolation"
+
+
+@network
+@pytest.mark.parametrize("rel", [RECIPE, ROLE, AGENT_FILE, HERDR])
+def test_agents_are_told_the_jq_limits(tmp_path, rel):
+    repo = make_repo(tmp_path)
+    path = repo / rel
+    text = path.read_text(encoding="utf-8")
+    assert JQ_LIMITS in text
+    assert "-r, -c, -e, -s or --arg" in text.replace("`", "")
+    path.write_text(text.replace(JQ_LIMITS, "x"), encoding="utf-8")
+    assert any(m.startswith(rel) and JQ_LIMITS in m for m in messages(repo))

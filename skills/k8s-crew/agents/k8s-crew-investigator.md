@@ -63,6 +63,8 @@ terminal. Do not print environment variables to check it.
      `column` or `jq` (not `sed`, `awk`, `yq` or `xargs`);
    - prefer `-o name`, `-o wide` or `-o json | jq '<program>'` with the program in
      single quotes and no file arguments (no `import`, `include`, `env` or `$ENV`);
+   - in jq, use only `-r`, `-c`, `-e`, `-s` or `--arg`, and no string interpolation
+     (`\(...)`): build text with `+`, `join` or `@tsv` instead;
    - only these kubectl commands: `get`, `describe`, `logs`, `events`, `top`,
      `explain`, `api-resources`, `api-versions`, `version`, `cluster-info`,
      `auth can-i`, `auth whoami`, `rollout status` and `rollout history`. To see who

@@ -54,15 +54,20 @@ CREW_PROGRAMS = {
     "scripts/viewer-kubeconfig.sh",
     "config/copilot-deny-tools.sh",
 }
+# The jq limits the hard check enforces (tools/transcript.py), told to every agent.
+JQ_LIMITS = ("no string interpolation", "must tell agents the jq limits: no string interpolation")
 # The investigator's evidence rules: in the role, and in the agent generated from it.
-ROLE_RULES = tuple(
-    (rule, f"must state the rule {rule}")
-    for rule in (
-        "**No speculative weaknesses.**",
-        "**Confirmed needs shown evidence.**",
-        "**Timestamps are not history.**",
-        "**Fix the cause, not its effects.**",
-    )
+ROLE_RULES = (
+    *(
+        (rule, f"must state the rule {rule}")
+        for rule in (
+            "**No speculative weaknesses.**",
+            "**Confirmed needs shown evidence.**",
+            "**Timestamps are not history.**",
+            "**Fix the cause, not its effects.**",
+        )
+    ),
+    JQ_LIMITS,
 )
 REQUIRED_TEXT = {
     SKILL_DIR / "SKILL.md": (
@@ -94,6 +99,7 @@ REQUIRED_TEXT = {
             "**Fix the cause, not its effects.**",
             "must state the rule **Fix the cause, not its effects.**",
         ),
+        JQ_LIMITS,
     ),
     ROLE: ROLE_RULES,
     # The generated agent is what Claude Code and Copilot load: check it too.
@@ -104,6 +110,7 @@ REQUIRED_TEXT = {
             "crew-start.sh --viewer",
             "must give every helper pane the guard with scripts/crew-start.sh --viewer",
         ),
+        JQ_LIMITS,
     ),
 }
 # herdr helpers have no agent definition, so their prompt must carry the hard rules itself.
