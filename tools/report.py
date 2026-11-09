@@ -1,8 +1,10 @@
 """Check that a crew report has the fixed shape.
 
 Script-only gate: the six H2 headings appear exactly once, in order, with no other H2
-between or around them; every fenced code block under ``## Fixes`` has a ``# Undo:`` line;
-the ``## Fixes`` prose never claims a fix was run (the crew only prints fixes).
+between or around them; ``## Fixes`` has at least one fenced code block, or says exactly
+"No fixes needed."; every fenced block under it has a ``# Undo:`` line and no ``# Undo:``
+line is empty; the ``## Fixes`` prose never claims a fix was run (the crew only prints
+fixes). A fix given only as prose or an indented block has no checkable undo, so it fails.
 """
 
 from __future__ import annotations
@@ -21,6 +23,8 @@ REPORT_SECTIONS: tuple[str, ...] = (
 _FIXES = "## Fixes"
 _FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 _UNDO = re.compile(r"^\s*# Undo:")
+_EMPTY_UNDO = re.compile(r"^\s*# Undo:\s*$")
+NO_FIXES = "No fixes needed."
 _RAN = re.compile(r"\b(I ran|I applied|has been applied)\b", re.IGNORECASE)
 
 
@@ -64,9 +68,16 @@ def report_problems(markdown: str) -> list[str]:
     if not problems and known != list(REPORT_SECTIONS):
         problems.append("headings are out of order; expected: " + ", ".join(REPORT_SECTIONS))
 
+    prose = " ".join(line.strip() for line in fix_prose if line.strip())
+    if _FIXES in headings and not fix_blocks and prose != NO_FIXES:
+        problems.append(
+            f"{_FIXES} has no fenced fix block; with no fixes it must say exactly: {NO_FIXES}"
+        )
     for number, block in enumerate(fix_blocks, start=1):
         if not any(_UNDO.match(line) for line in block):
             problems.append(f"{_FIXES} code block {number} is missing # Undo: line")
+        elif any(_EMPTY_UNDO.match(line) for line in block):
+            problems.append(f"{_FIXES} code block {number} has an empty # Undo: line")
     for line in fix_prose:
         if _RAN.search(line):
             problems.append(

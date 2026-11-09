@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from tools.report import REPORT_SECTIONS, report_problems
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -76,3 +78,40 @@ def test_tilde_fence_needs_undo():
     assert report_problems(text) == []
     text = text.replace("# Undo:", "# Note:")
     assert any("missing # Undo" in p for p in report_problems(text))
+
+
+def with_fixes(body: str) -> str:
+    """The clean report with its ## Fixes section replaced by ``body``."""
+    clean = (FIXTURES / "report-clean.md").read_text()
+    return clean.replace("No fixes needed.\n", body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Patch the configmap: kubectl -n my-namespace patch configmap my-config ...\n",
+        "    kubectl -n my-namespace delete pod my-pod\n    # Undo: none\n",
+        "No fixes needed. But restart the kubelet on my-node-2.\n",
+        "no fixes needed\n",
+        "",
+    ],
+)
+def test_fixes_without_a_fenced_block_fail(body):
+    problems = report_problems(with_fixes(body))
+    assert any("## Fixes has no fenced fix block" in p for p in problems), problems
+
+
+@pytest.mark.parametrize("undo", ["# Undo:", "# Undo:   ", "  # Undo:\t"])
+def test_empty_undo_fails(undo):
+    body = f"Fix it.\n\n```bash\nkubectl -n my-namespace scale deployment my-app --replicas 2\n{undo}\n```\n"
+    problems = report_problems(with_fixes(body))
+    assert any("empty # Undo:" in p for p in problems), problems
+
+
+def test_one_empty_undo_among_good_ones_fails():
+    body = (
+        "```bash\nkubectl -n my-namespace scale deployment my-app --replicas 2\n"
+        "# Undo: kubectl -n my-namespace scale deployment my-app --replicas 1\n"
+        "# Undo:\n```\n"
+    )
+    assert any("empty # Undo:" in p for p in report_problems(with_fixes(body)))
