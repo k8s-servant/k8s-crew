@@ -1,6 +1,7 @@
 import itertools
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -269,12 +270,18 @@ FAKE_KUBECTL = """#!/usr/bin/env bash
 echo "kubectl $*" >> "$FAKE_LOG"
 case "$1 $2" in
   "config current-context") echo "${FAKE_CONTEXT:-}" ;;
+  "config view")
+    case "$*" in
+      *cluster.server*) echo "https://127.0.0.1:6443" ;;
+      *certificate-authority-data*) echo "RkFLRS1DQQ==" ;;
+    esac ;;
 esac
 exit 0
 """
 FAKE_CLAUDE = """#!/usr/bin/env bash
 {
   echo "claude cwd=$PWD kubeconfig=$KUBECONFIG"
+  echo "guard dir=$K8S_CREW_GUARD kubectl=$(command -v kubectl)"
   printf 'arg=%s\\n' "$@"
 } >> "$FAKE_LOG"
 # Try the cluster through PATH, as the agent's shell would.
@@ -460,6 +467,15 @@ def test_crew_guard_refuses_other_clusters(tmp_path):
     assert "guard env=126" in log
     assert "guard server=126" in log
     assert "kubectl get pods --context other" not in log
+    guard = re.search(r"^guard dir=(\S+) kubectl=(\S+)$", log, re.MULTILINE)
+    assert guard and guard.group(2) == guard.group(1) + "/kubectl"
+
+
+def test_crew_uses_the_product_guard():
+    """One copy of the guard: the test kit installs scripts/kubectl-guard, never its own."""
+    text = (REPO / "tests" / "crew.sh").read_text()
+    assert '"$skill_dir/scripts/kubectl-guard" install "$work/bin"' in text
+    assert 'exec "$real"' not in text
 
 
 def run_copilot(tmp_path, mode: str, events: list[dict]):

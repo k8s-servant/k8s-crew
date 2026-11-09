@@ -64,7 +64,6 @@ fi
 read_verbs=(
   get describe logs events top explain api-resources api-versions version cluster-info
   "auth can-i" "auth whoami" "rollout status" "rollout history"
-  "config current-context" "config get-contexts"
 )
 # Pipe filters. None of them may write a file: yq (-i) is left out; Claude also denies
 # sort -o and uniq's output-file argument. Copilot cannot match flags inside a command,
@@ -137,8 +136,10 @@ claude_flags() {
 
 copilot_flags() {
   local project="$1" session="$2" verb tool flag dir
-  # The deny script prints the flags shell-quoted, ready for eval.
-  eval "flags=($("$skill_dir/config/copilot-deny-tools.sh" --auto-allow))"
+  # The deny script prints the flags shell-quoted, ready for eval. --auto-allow needs
+  # the kubectl guard active, as it is for the agent.
+  eval "flags=($(K8S_CREW_GUARD="$work/bin" PATH="$work/bin:$PATH" \
+    "$skill_dir/config/copilot-deny-tools.sh" --auto-allow))"
   flags+=(
     --trust-folder --session-id "$session" --output-format json --no-ask-user
     --no-auto-update --disable-builtin-mcps --no-custom-instructions
@@ -146,7 +147,7 @@ copilot_flags() {
   )
   for verb in "${copilot_denied_verbs[@]}"; do flags+=(--deny-tool "shell(kubectl $verb:*)"); done
   # Copilot matches only a command's leading words, so a target flag is denied here only
-  # when it comes first; the kubectl guard on PATH refuses it anywhere.
+  # when it comes first; the kubectl guard (scripts/kubectl-guard) refuses it anywhere.
   for flag in "${target_flags[@]}"; do flags+=(--deny-tool "shell(kubectl $flag:*)"); done
   for dir in "${private_paths[@]}"; do flags+=(--deny-tool "read($dir/**)"); done
   for tool in "${copilot_filters[@]}"; do flags+=(--allow-tool "shell($tool:*)"); done
@@ -158,39 +159,6 @@ copilot_flags() {
       flags+=(--allow-tool "shell($tool:*)")
     done
   fi
-}
-
-# A kubectl first on the agent's PATH that runs the real one only with the viewer
-# kubeconfig and without any flag that picks another kubeconfig, cluster or identity.
-# It is the runtime lock behind the permission rules (Copilot rules cannot match flags).
-make_guard() {
-  local bin="$1" viewer="$2" real
-  real="$(command -v kubectl)"
-  mkdir -p "$bin"
-  {
-    echo '#!/usr/bin/env bash'
-    echo '# k8s-crew test guard, written by tests/crew.sh for one run.'
-    printf 'viewer=%q\nreal=%q\n' "$viewer" "$real"
-    printf 'flags=(%s)\n' "${target_flags[*]}"
-    cat <<'GUARD'
-refuse() {
-  echo "k8s-crew test guard: $1; this run may only use its view-only kubeconfig" >&2
-  exit 126
-}
-[[ "${KUBECONFIG:-}" == "$viewer" ]] || refuse "KUBECONFIG is not the viewer kubeconfig"
-for arg in "$@"; do
-  for flag in "${flags[@]}"; do
-    # A short flag also takes its value attached: -sURL.
-    if [[ "$arg" == "$flag" || "$arg" == "$flag="* || ("$flag" != --* && "$arg" == "$flag"?*) ]]
-    then
-      refuse "$flag is not allowed"
-    fi
-  done
-done
-exec "$real" "$@"
-GUARD
-  } > "$bin/kubectl"
-  chmod 755 "$bin/kubectl"
 }
 
 # A fresh git project with the skills (and, for the crew, the investigator) linked in.
@@ -243,21 +211,24 @@ for ((i = 1; i <= runs; i++)); do
   "$skill_dir/scripts/viewer-kubeconfig.sh" --out "$work/viewer.kubeconfig" > /dev/null
   project="$work/project"
   make_project "$project"
-  make_guard "$work/bin" "$work/viewer.kubeconfig"
+  # The product's kubectl guard, first on the agent's PATH, as scripts/crew-start.sh sets
+  # it up: the runtime lock behind the permission rules (Copilot rules cannot match flags).
+  mkdir "$work/bin"
+  "$skill_dir/scripts/kubectl-guard" install "$work/bin" "$work/viewer.kubeconfig"
 
   started=$SECONDS
   status=0
   if [[ "$agent" == claude ]]; then
     claude_flags "$project"
     (cd "$project" && KUBECONFIG="$work/viewer.kubeconfig" PATH="$work/bin:$PATH" \
-      claude -p "$prompt" "${flags[@]}" < /dev/null > "$run_dir/stream.jsonl" \
+      K8S_CREW_GUARD="$work/bin" claude -p "$prompt" "${flags[@]}" < /dev/null > "$run_dir/stream.jsonl" \
       2> "$run_dir/stderr.txt") || status=$?
     source_args=(--claude "$run_dir/stream.jsonl")
   else
     session="$(uuidgen | tr '[:upper:]' '[:lower:]')"
     copilot_flags "$project" "$session"
     (cd "$project" && KUBECONFIG="$work/viewer.kubeconfig" PATH="$work/bin:$PATH" \
-      copilot -p "$prompt" "${flags[@]}" < /dev/null > "$run_dir/stream.jsonl" \
+      K8S_CREW_GUARD="$work/bin" copilot -p "$prompt" "${flags[@]}" < /dev/null > "$run_dir/stream.jsonl" \
       2> "$run_dir/stderr.txt") || status=$?
     # The session's own event log is the verified format; read it, not stdout.
     events="$HOME/.copilot/session-state/$session/events.jsonl"

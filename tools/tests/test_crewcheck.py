@@ -311,6 +311,17 @@ def test_skill_states_plain_command_rule_for_the_boss(tmp_path, needle):
     assert any(m.startswith(f"{SKILL}/SKILL.md") and needle in m for m in messages(repo))
 
 
+def guard_env(tmp_path: Path, env: dict | None = None) -> dict:
+    """An environment where the kubectl guard looks active, as under crew-start.sh."""
+    guard = tmp_path / "guard"
+    guard.mkdir(exist_ok=True)
+    (guard / "kubectl").write_text("#!/usr/bin/env bash\n")
+    (guard / "kubectl").chmod(0o755)
+    env = dict(env or os.environ)
+    env.update(PATH=f"{guard}:{env['PATH']}", K8S_CREW_GUARD=str(guard))
+    return env
+
+
 def copilot_args(*args, env=None):
     done = subprocess.run(
         ["bash", str(CONFIG / "copilot-deny-tools.sh"), *args],
@@ -323,9 +334,9 @@ def copilot_args(*args, env=None):
 
 
 @pytest.mark.parametrize("auto", [False, True])
-def test_copilot_lines_have_no_quotes_and_pair_each_flag(auto):
+def test_copilot_lines_have_no_quotes_and_pair_each_flag(tmp_path, auto):
     prefix = ["--auto-allow"] if auto else []
-    lines = copilot_args(*prefix, "--lines").splitlines()
+    lines = copilot_args(*prefix, "--lines", env=guard_env(tmp_path)).splitlines()
     assert not any(c in "".join(lines) for c in "'\"\\`$")
     pairs = list(zip(lines[::2], lines[1::2], strict=True))
     allows = [rule for flag, rule in pairs if flag == "--allow-tool"]
@@ -339,7 +350,10 @@ def test_copilot_lines_have_no_quotes_and_pair_each_flag(auto):
         assert f"shell(kubectl {verb}:*)" in denied, verb
     # Copilot 1.0.107 matches leading words only: no wildcard before the end of a rule.
     for _flag, rule in pairs:
-        assert "*" not in rule.removesuffix(":*)"), rule
+        if rule.startswith("shell("):
+            assert "*" not in rule.removesuffix(":*)"), rule
+        else:
+            assert rule.startswith("read(") and "*" not in rule.removesuffix("/**)"), rule
 
 
 @network
@@ -363,16 +377,18 @@ def test_copilot_denies_every_kubectl_command_that_is_not_run_freely():
 
 
 @pytest.mark.parametrize("prefix", ["", "--auto-allow"])
-def test_copilot_default_output_evals_to_the_same_arguments(prefix):
+def test_copilot_default_output_evals_to_the_same_arguments(tmp_path, prefix):
     script = CONFIG / "copilot-deny-tools.sh"
+    env = guard_env(tmp_path)
     done = subprocess.run(
         ["bash", "-c", f'eval "flags=($(bash {script} {prefix}))"; printf "%s\\n" "${{flags[@]}}"'],
         capture_output=True,
         text=True,
         check=True,
+        env=env,
     )
     args = [prefix] if prefix else []
-    assert done.stdout == copilot_args(*args, "--lines")
+    assert done.stdout == copilot_args(*args, "--lines", env=env)
 
 
 @pytest.mark.parametrize("prefix", [[], ["--auto-allow"]])
@@ -380,6 +396,6 @@ def test_copilot_run_starts_copilot_with_the_rules(tmp_path, prefix):
     fake = tmp_path / "copilot"
     fake.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n')
     fake.chmod(0o755)
-    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    env = guard_env(tmp_path, {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"})
     out = copilot_args(*prefix, "--run", "--agent", "my-agent", env=env)
-    assert out == copilot_args(*prefix, "--lines") + "--agent\nmy-agent\n"
+    assert out == copilot_args(*prefix, "--lines", env=env) + "--agent\nmy-agent\n"
