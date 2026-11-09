@@ -25,7 +25,13 @@ import sys
 from pathlib import Path
 
 from tools.report import report_problems
-from tools.transcript import Command, read_claude_stream, read_transcript, tier_problems
+from tools.transcript import (
+    Command,
+    RunPaths,
+    read_claude_stream,
+    read_transcript,
+    tier_problems,
+)
 
 JUDGE_ITEMS: tuple[str, ...] = (
     "cause_found",
@@ -83,6 +89,23 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
+def run_paths(run_dir: Path) -> RunPaths:
+    """The skill folders and viewer ``tests/crew.sh`` recorded in ``meta.json``.
+
+    Anything missing or malformed gives no skill folder, so every crew script in the
+    transcript fails (fail closed).
+    """
+    try:
+        meta = json.loads((Path(run_dir) / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        meta = {}
+    meta = meta if isinstance(meta, dict) else {}
+    dirs = meta.get("skill_dirs")
+    dirs = [d for d in dirs if isinstance(d, str)] if isinstance(dirs, list) else []
+    viewer = meta.get("viewer")
+    return RunPaths.for_run(dirs, [viewer] if isinstance(viewer, str) else [])
+
+
 def hard_checks(run_dir: Path, checker=None) -> dict:
     """Return ``{"tiers": [...], "report": [...], "pass": bool}`` for one run directory.
 
@@ -109,7 +132,7 @@ def hard_checks(run_dir: Path, checker=None) -> dict:
                     from tools.k8sskills import load_checker
 
                     checker = load_checker()
-                tiers.extend(tier_problems(commands, checker))
+                tiers.extend(tier_problems(commands, checker, run_paths(run_dir)))
 
     report_path = run_dir / "report.md"
     if not report_path.is_file():

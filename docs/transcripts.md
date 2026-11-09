@@ -9,9 +9,11 @@ the pipe filters reading stdin (any file argument fails), the herdr subcommands 
 path in a `k8s-crew/scripts/` folder, `crew-start.sh --viewer <viewer> shell` only as
 the text of `herdr pane run`, and `printenv` with one variable name. Anything else,
 such as `docker`, `ssh`, `curl`, `systemctl` or `crew-start.sh shell -c ...`, fails the
-run. The check is script-only and fails closed. The viewer path must be named like the
-crew writes it (`k8s-crew-viewer` or `*viewer.kubeconfig`), since the transcript does not
-say which file the session used.
+run. The check is script-only and fails closed. The crew's scripts and the Claude
+helper's settings file count only from the skill folders `tests/crew.sh` records in
+`meta.json` (`skill_dirs`), and a helper pane's viewer only as the recorded `viewer` or
+`~/.kube/k8s-crew-viewer`; paths with `..` or empty parts never match, and a run with
+no recorded skill folder fails every such command.
 
 ## Normalized format
 

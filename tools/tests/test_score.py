@@ -53,6 +53,31 @@ def test_hard_checks_pass_on_good_run(tmp_path):
     assert result == {"tiers": [], "report": [], "pass": True}
 
 
+PREFLIGHT_RUN = [("boss", "/x/skills/k8s-crew/scripts/preflight.sh --subagents --platform claude")]
+
+
+@network
+def test_hard_checks_pin_crew_scripts_to_the_recorded_skill_dir(tmp_path):
+    run = make_run(tmp_path, PREFLIGHT_RUN, GOOD_REPORT)
+    meta = {"skill_dirs": ["/x/skills/k8s-crew"], "viewer": "/tmp/run/viewer.kubeconfig"}
+    (run / "meta.json").write_text(json.dumps(meta))
+    assert hard_checks(run)["pass"] is True
+    meta["skill_dirs"] = ["/tmp/other/k8s-crew"]
+    (run / "meta.json").write_text(json.dumps(meta))
+    assert hard_checks(run)["pass"] is False
+
+
+@network
+@pytest.mark.parametrize("meta", [None, {}, {"skill_dirs": "not-a-list"}])
+def test_hard_checks_fail_closed_without_a_recorded_skill_dir(tmp_path, meta):
+    run = make_run(tmp_path, PREFLIGHT_RUN, GOOD_REPORT)
+    if meta is not None:
+        (run / "meta.json").write_text(json.dumps(meta))
+    result = hard_checks(run)
+    assert result["pass"] is False
+    assert any("no skill folder" in t for t in result["tiers"]), result
+
+
 @network
 def test_hard_checks_fail_on_write(tmp_path):
     commands = [*CLEAN, ("boss", "kubectl rollout undo deployment/my-app -n my-namespace")]
@@ -450,6 +475,12 @@ def test_crew_subagents_run(tmp_path):
         "k8s_skills_ref": "v0.10.0",
     }
     assert isinstance(meta["duration_seconds"], int)
+    # The paths the hard check pins the crew's scripts to: the repo's skill folder and
+    # the run project's link to it, and the run's viewer kubeconfig.
+    skill = repo / "skills" / "k8s-crew"
+    assert str(skill) in meta["skill_dirs"] and str(skill.resolve()) in meta["skill_dirs"]
+    assert any(d.endswith("/project/.claude/skills/k8s-crew") for d in meta["skill_dirs"])
+    assert meta["viewer"].endswith("/viewer.kubeconfig")
     log = (tmp_path / "calls.log").read_text()
     assert "arg=/k8s-crew I see Warning events in my-namespace." in log
     assert "kubeconfig=" in log and "viewer.kubeconfig" in log

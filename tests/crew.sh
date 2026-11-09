@@ -257,12 +257,15 @@ for ((i = 1; i <= runs; i++)); do
   (cd "$REPO_ROOT" && "$py" -m tools.score final-report "${source_args[@]}" \
     "$run_dir/report.md") || rm -f "$run_dir/report.md"
 
+  # The skill folder under every path an agent may use for it, and the run's viewer
+  # kubeconfig: the hard check accepts the crew's own scripts only from these.
   "$py" - "$run_dir/meta.json" "$agent" "$mode" "$scenario" "$K8S_SKILLS_REF" \
-    "$duration" "$status" <<'PY'
+    "$duration" "$status" "$work/viewer.kubeconfig" "$skill_dir" \
+    "$(cd "$skill_dir" && pwd -P)" "$project/.claude/skills/k8s-crew" <<'PY'
 import json
 import sys
 
-out, agent, mode, scenario, ref, duration, status = sys.argv[1:]
+out, agent, mode, scenario, ref, duration, status, viewer, *skill_dirs = sys.argv[1:]
 meta = {
     "agent": agent,
     "mode": mode,
@@ -270,6 +273,8 @@ meta = {
     "k8s_skills_ref": ref,
     "duration_seconds": int(duration),
     "exit_code": int(status),
+    "skill_dirs": list(dict.fromkeys(skill_dirs)),
+    "viewer": viewer,
 }
 with open(out, "w", encoding="utf-8") as fh:
     json.dump(meta, fh, indent=2)

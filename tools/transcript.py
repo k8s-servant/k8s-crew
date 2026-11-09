@@ -36,9 +36,11 @@ _SEPARATORS = ("&&", "||", ";", "\n")
 #   - herdr: the boss's own orchestration in herdr mode, limited to HERDR_SUBCOMMANDS;
 #     the text of ``herdr pane run`` is a command in another pane and is checked too,
 #     and ``herdr agent start`` only takes the helper arguments runners/herdr.md gives;
-#   - preflight.sh from a k8s-crew skill folder, by full path, with its documented flags;
+#   - preflight.sh from the run's skill folder (RunPaths), by full path, with its
+#     documented flags;
 #   - crew-start.sh only as the text of ``herdr pane run``, exactly
-#     ``<skill-dir>/scripts/crew-start.sh --viewer <viewer kubeconfig> shell``: that is
+#     ``<skill-dir>/scripts/crew-start.sh --viewer <viewer kubeconfig> shell`` with the
+#     run's skill folder and the run's (or the default) viewer kubeconfig: that is
 #     the one form runners/herdr.md gives. Agents never start claude or copilot with it,
 #     and any other form (``shell -c ...``, ``--auto-allow``, another kubeconfig) would
 #     run outside this check;
@@ -51,19 +53,13 @@ HERDR_SUBCOMMANDS = {
     "pane": {"split", "list", "get", "layout", "run", "wait-output", "read", "close"},
     "agent": {"list", "get", "start", "prompt", "wait", "read"},
 }
-_PREFLIGHT = re.compile(r"/.*(?<![^/])k8s-crew/scripts/preflight\.sh")
-_CREW_START = re.compile(r"/.*(?<![^/])k8s-crew/scripts/crew-start\.sh")
-_CLAUDE_SETTINGS = re.compile(r"/.*(?<![^/])k8s-crew/config/claude-settings\.example\.json")
 _PREFLIGHT_ARGS = (
     [],
     ["--subagents", "--platform", "claude"],
     ["--subagents", "--platform", "copilot"],
 )
-# The viewer kubeconfig names the crew writes: viewer-kubeconfig.sh's default
-# (~/.kube/k8s-crew-viewer) and the test kit's (<run>/viewer.kubeconfig). Nothing in the
-# transcript says which file the session was started with, so the name is the check;
-# crew-start.sh itself refuses a file that is not a crew viewer kubeconfig.
-_VIEWER = re.compile(r"/[^:]*/(k8s-crew-viewer|[^/:]*viewer\.kubeconfig)")
+# Copilot rule values a helper start may carry: the shapes copilot-deny-tools.sh prints.
+_COPILOT_RULE = re.compile(r"(shell|read)\([^()\s-][^()]*\)")
 _HERDR_START_OPTIONS = {"--kind", "--pane", "--timeout"}
 _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
 
@@ -72,6 +68,46 @@ _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
 class Command:
     agent: str
     command: str
+
+
+def clean_path(path: str) -> bool:
+    """An absolute path with no empty, ``.`` or ``..`` part and no ``:``."""
+    if not path.startswith("/") or ":" in path or path == "/":
+        return False
+    return all(part not in ("", ".", "..") for part in path[1:].split("/"))
+
+
+@dataclass(frozen=True)
+class RunPaths:
+    """Where the run's own crew files are, so the crew's scripts are pinned to them.
+
+    ``skill_dirs`` are the k8s-crew skill folders the run installed (the folder with
+    SKILL.md, under every path an agent may use for it); ``viewers`` the viewer
+    kubeconfigs it may start a helper pane with: the one recorded for the run and the
+    documented default ``~/.kube/k8s-crew-viewer``. Paths that are not clean absolute
+    paths are dropped, so they can never match.
+    """
+
+    skill_dirs: tuple[str, ...] = ()
+    viewers: tuple[str, ...] = ()
+
+    @classmethod
+    def for_run(cls, skill_dirs=(), viewers=(), home: str | None = None) -> RunPaths:
+        home = str(Path.home()) if home is None else home
+        default = f"{home}/.kube/k8s-crew-viewer"
+        kept_viewers = [v for v in [*viewers, default] if clean_path(v)]
+        return cls(
+            tuple(d for d in dict.fromkeys(skill_dirs) if clean_path(d)),
+            tuple(dict.fromkeys(kept_viewers)),
+        )
+
+    def crew_file(self, path: str, rel: str) -> str | None:
+        """None when ``path`` is ``<a skill dir>/<rel>``, else the problem."""
+        if not self.skill_dirs:
+            return "no skill folder is recorded for this run, so crew files cannot be checked"
+        if any(path == f"{d}/{rel}" for d in self.skill_dirs):
+            return None
+        return f"{rel} must be run from the run's k8s-crew skill folder"
 
 
 def _scan(line: str, separators: tuple[str, ...]) -> list[str]:
@@ -126,7 +162,7 @@ def is_cluster_command(piece: str, allowlist: dict) -> bool:
     return re.search(pattern, piece) is not None
 
 
-def _herdr_start_problems(args: list[str]) -> list[str]:
+def _herdr_start_problems(args: list[str], paths: RunPaths) -> list[str]:
     """``herdr agent start <name> --kind K --pane P [--timeout N] -- <helper args>``."""
     if "--" not in args:
         return ["herdr agent start without the crew helper arguments after --"]
@@ -137,11 +173,10 @@ def _herdr_start_problems(args: list[str]) -> list[str]:
         return [f"herdr agent start option not allowed: {' '.join(options)}"]
     kind = pairs.get("--kind")
     if kind == "claude":
-        ok = (
-            len(helper) == 4
-            and helper[:3] == ["--permission-mode", "default", "--settings"]
-            and _CLAUDE_SETTINGS.fullmatch(helper[3])
-        )
+        settings = "config/claude-settings.example.json"
+        ok = len(helper) == 4 and helper[:3] == ["--permission-mode", "default", "--settings"]
+        if ok and (problem := paths.crew_file(helper[3], settings)):
+            return [problem]
         if not ok:
             return [
                 (
@@ -155,7 +190,7 @@ def _herdr_start_problems(args: list[str]) -> list[str]:
             helper
             and len(helper) % 2 == 0
             and all(
-                (flag == "--deny-tool" and rule)
+                (flag == "--deny-tool" and _COPILOT_RULE.fullmatch(rule))
                 or (flag == "--allow-tool" and rule == "shell(kubectl:*)")
                 for flag, rule in rules
             )
@@ -167,28 +202,32 @@ def _herdr_start_problems(args: list[str]) -> list[str]:
     return []
 
 
-def _herdr_problems(args: list[str], checker, nested: bool) -> list[str]:
+def _herdr_problems(args: list[str], checker, nested: bool, paths: RunPaths) -> list[str]:
     if len(args) < 2 or args[1] not in HERDR_SUBCOMMANDS.get(args[0], ()):
         return [f"herdr command not allowed: herdr {' '.join(args[:2])}"]
     if args[:2] == ["pane", "run"]:
         if nested or len(args) != 4:
             return ["herdr pane run takes one pane and one command"]
-        return [f"in pane: {problem}" for problem in command_problems(args[3], checker, True)]
+        inner = command_problems(args[3], checker, True, paths)
+        return [f"in pane: {problem}" for problem in inner]
     if args[:2] == ["agent", "start"]:
-        return _herdr_start_problems(args[2:])
+        return _herdr_start_problems(args[2:], paths)
     return []
 
 
-def _crew_start_problems(words: list[str], nested: bool) -> list[str]:
+def _crew_start_problems(words: list[str], nested: bool, paths: RunPaths) -> list[str]:
     if not nested:
         return ["crew-start.sh runs only as the text of herdr pane run"]
-    ok = (
-        len(words) == 4
-        and _CREW_START.fullmatch(words[0])
-        and words[1] == "--viewer"
-        and _VIEWER.fullmatch(words[2])
-        and words[3] == "shell"
-    )
+    if problem := paths.crew_file(words[0], "scripts/crew-start.sh"):
+        return [problem]
+    ok = len(words) == 4 and words[1] == "--viewer" and words[3] == "shell"
+    if ok and words[2] not in paths.viewers:
+        return [
+            (
+                "crew-start.sh --viewer must be the run's viewer kubeconfig or "
+                "~/.kube/k8s-crew-viewer"
+            )
+        ]
     if not ok:
         return [
             (
@@ -199,7 +238,7 @@ def _crew_start_problems(words: list[str], nested: bool) -> list[str]:
     return []
 
 
-def _local_problems(piece: str, checker, nested: bool = False) -> list[str]:
+def _local_problems(piece: str, checker, nested: bool, paths: RunPaths) -> list[str]:
     """Problems of a piece that is not a cluster command; "herdr" marks herdr plumbing."""
     module = checker.commands_module
     segments = module._scan(piece)
@@ -218,13 +257,14 @@ def _local_problems(piece: str, checker, nested: bool = False) -> list[str]:
         elif program == "herdr":
             problems.append("herdr")
         elif name == "preflight.sh":
-            if not _PREFLIGHT.fullmatch(program) or words[1:] not in _PREFLIGHT_ARGS:
+            if problem := paths.crew_file(program, "scripts/preflight.sh"):
+                problems.append(problem)
+            elif words[1:] not in _PREFLIGHT_ARGS:
                 problems.append(
-                    "preflight.sh is allowed only by its full path in a k8s-crew skill "
-                    "folder, with no flags or --subagents --platform claude|copilot"
+                    "preflight.sh takes no flags or --subagents --platform claude|copilot"
                 )
         elif name == "crew-start.sh":
-            problems += _crew_start_problems(words, nested)
+            problems += _crew_start_problems(words, nested, paths)
         elif program == "printenv":
             if len(words) != 2 or not _ENV_NAME.fullmatch(words[1]):
                 problems.append("printenv takes exactly one variable name")
@@ -233,21 +273,24 @@ def _local_problems(piece: str, checker, nested: bool = False) -> list[str]:
     return problems
 
 
-def command_problems(line: str, checker, nested: bool = False) -> list[str]:
+def command_problems(
+    line: str, checker, nested: bool = False, paths: RunPaths | None = None
+) -> list[str]:
     """Problems of one command line, each as ``'<piece>': <reason>``."""
+    paths = paths or RunPaths()
     try:
         pieces = split_command(line)
     except ValueError as exc:
         return [f"cannot parse {line!r}: {exc}"]
     problems: list[str] = []
     for piece in pieces:
-        local = _local_problems(piece, checker, nested)
+        local = _local_problems(piece, checker, nested, paths)
         if "herdr" in local:
             # herdr plumbing: its own arguments (prompt text, agent flags) are not shell
             # commands; only the text of `herdr pane run` is checked as one.
             words = checker.commands_module._scan(piece)[0]
             reasons = [r for r in local if r != "herdr"]
-            reasons += _herdr_problems(words[1:], checker, nested)
+            reasons += _herdr_problems(words[1:], checker, nested, paths)
         elif is_cluster_command(piece, checker.allowlist):
             reasons = checker.check_command(piece) + checker.secret_problems(piece)
         else:
@@ -256,12 +299,17 @@ def command_problems(line: str, checker, nested: bool = False) -> list[str]:
     return problems
 
 
-def tier_problems(commands: list[Command], checker) -> list[str]:
-    """Problems for every command that is not run-freely, not allowed or touches Secrets."""
+def tier_problems(commands: list[Command], checker, paths: RunPaths | None = None) -> list[str]:
+    """Problems for every command that is not run-freely, not allowed or touches Secrets.
+
+    ``paths`` pins the crew's own scripts and settings to the run's skill folder; without
+    it, every command that names one fails.
+    """
     problems: list[str] = []
     for cmd in commands:
         problems += [
-            f"{cmd.agent}: {problem}" for problem in command_problems(cmd.command, checker)
+            f"{cmd.agent}: {problem}"
+            for problem in command_problems(cmd.command, checker, paths=paths)
         ]
     return problems
 

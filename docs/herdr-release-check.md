@@ -185,12 +185,26 @@ in `notes.md`.
   "k8s_skills_ref": "v0.10.0",
   "duration_seconds": 420,
   "exit_code": 0,
-  "helpers": ["crew-claude:claude", "crew-copilot:copilot"]
+  "helpers": ["crew-claude:claude", "crew-copilot:copilot"],
+  "skill_dirs": [
+    "<project>/.claude/skills/k8s-crew",
+    "<repo>/skills/k8s-crew"
+  ],
+  "viewer": "<project-parent>/viewer.kubeconfig"
 }
 ```
 
 `agent` is the boss's vendor, `k8s_skills_ref` the pin in `tests/versions.env`, and
 `duration_seconds` the time from the prompt to the final report.
+
+`skill_dirs` and `viewer` are what the hard check pins the crew's own commands to:
+`preflight.sh`, `crew-start.sh` and the Claude helper's `--settings` file count only from
+a listed skill folder, and `crew-start.sh --viewer` only with the listed viewer (or
+`~/.kube/k8s-crew-viewer`). Write them as full paths with no `..`, as the boss used
+them: `<project>` is the path step 1 printed, `<repo>` this repository's path,
+`<project-parent>` the folder `$project/..` stands for (`dirname "$project"`), because
+`crew-start.sh` passes the viewer on resolved. Without them, scoring fails every crew
+script in the transcript. Check against the boss's `printenv KUBECONFIG` output.
 
 ## 6. Score
 

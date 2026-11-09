@@ -6,6 +6,7 @@ import pytest
 from tools.k8sskills import load_checker
 from tools.transcript import (
     Command,
+    RunPaths,
     is_cluster_command,
     read_claude_stream,
     read_transcript,
@@ -58,6 +59,19 @@ def test_secret_read_fails():
     assert tier_problems(cmds, load_checker()) != []
 
 
+# The skill folders and viewer a scored run records in meta.json (tests/crew.sh).
+PATHS = RunPaths.for_run(
+    skill_dirs=[
+        "/x/skills/k8s-crew",
+        "/tmp/run/skills/k8s-crew",
+        "/home/me/.claude/plugins/cache/m/k8s-crew/abc/skills/k8s-crew",
+        "/x/.claude/skills/k8s-crew",
+    ],
+    viewers=["/tmp/run/viewer.kubeconfig"],
+    home="/home/me",
+)
+
+
 # Local commands a crew run may use: herdr plumbing, the crew's scripts, printenv NAME
 # and the pipe filters (stdin only).
 ALLOWED_LOCAL = [
@@ -105,7 +119,7 @@ ALLOWED_LOCAL = [
 @network
 @pytest.mark.parametrize("line", ALLOWED_LOCAL)
 def test_allowed_local_commands_pass(line):
-    assert tier_problems([Command("boss", line)], load_checker()) == []
+    assert tier_problems([Command("boss", line)], load_checker(), PATHS) == []
 
 
 # Anything that is not a cluster tool, a crew script, herdr plumbing, printenv NAME or a
@@ -232,7 +246,81 @@ FILTER_FILE_READS = [
     "line", LAUNCHER_ESCAPES + HELPER_START_ESCAPES + PREFLIGHT_ESCAPES + FILTER_FILE_READS
 )
 def test_launcher_helper_preflight_and_filter_escapes_fail(line):
-    assert tier_problems([Command("boss", line)], load_checker()), line
+    assert tier_problems([Command("boss", line)], load_checker(), PATHS), line
+
+
+# The crew's scripts and settings are accepted only from the skill folders recorded for
+# the run, and a viewer only at the documented default or the run's recorded path.
+EVIL = "/tmp/evil/k8s-crew"
+PATH_PINNING_ESCAPES = [
+    "/tmp/k8s-crew/scripts/preflight.sh",
+    f"{EVIL}/scripts/preflight.sh --subagents --platform claude",
+    "/x/skills/k8s-crew/../../../tmp/k8s-crew/scripts/preflight.sh",
+    "//k8s-crew/scripts/preflight.sh",
+    "/x/skills//k8s-crew/scripts/preflight.sh",
+    "/x/skills/k8s-crew/./scripts/preflight.sh",
+    "/x/skills/k8s-crew/scripts/preflight.sh/",
+    f"herdr pane run p '{EVIL}/scripts/crew-start.sh --viewer {VIEWER} shell'",
+    (
+        "herdr pane run p '/x/skills/k8s-crew/../../../tmp/k8s-crew/scripts/crew-start.sh "
+        f"--viewer {VIEWER} shell'"
+    ),
+    f"herdr pane run p '//k8s-crew/scripts/crew-start.sh --viewer {VIEWER} shell'",
+    (
+        "herdr agent start crew-claude --kind claude --pane p -- --permission-mode default "
+        "--settings /tmp/k8s-crew/config/claude-settings.example.json"
+    ),
+    (
+        "herdr agent start crew-claude --kind claude --pane p -- --permission-mode default "
+        "--settings /x/skills/k8s-crew/../k8s-crew/config/claude-settings.example.json"
+    ),
+    # Viewers: only the default under the scorer's home, or the run's recorded file.
+    f"herdr pane run p '{CREW_START} --viewer /home/me/.kube/../.kube/k8s-crew-viewer shell'",
+    f"herdr pane run p '{CREW_START} --viewer /tmp/run/admin-viewer.kubeconfig shell'",
+    f"herdr pane run p '{CREW_START} --viewer /tmp/other/viewer.kubeconfig shell'",
+    f"herdr pane run p '{CREW_START} --viewer /home/other/.kube/k8s-crew-viewer shell'",
+    f"herdr pane run p '{CREW_START} --viewer /tmp/run/../run/viewer.kubeconfig shell'",
+    # Copilot rule values: only shell(...) or read(...), never a flag.
+    "herdr agent start crew-copilot --kind copilot --pane p -- --deny-tool --allow-all-tools",
+    "herdr agent start crew-copilot --kind copilot --pane p -- --deny-tool -x",
+    "herdr agent start crew-copilot --kind copilot --pane p -- --deny-tool write",
+    "herdr agent start crew-copilot --kind copilot --pane p -- --deny-tool 'url(x)'",
+    "herdr agent start crew-copilot --kind copilot --pane p -- --deny-tool 'shell(a)(b)'",
+    "herdr agent start crew-copilot --kind copilot --pane p -- --deny-tool 'shell(-x)'",
+]
+
+
+@network
+@pytest.mark.parametrize("line", PATH_PINNING_ESCAPES)
+def test_paths_outside_the_run_fail(line):
+    assert tier_problems([Command("boss", line)], load_checker(), PATHS), line
+
+
+CREW_PATH_LINES = [
+    "/x/skills/k8s-crew/scripts/preflight.sh",
+    f"herdr pane run p '{CREW_START} --viewer {VIEWER} shell'",
+    (
+        "herdr agent start crew-claude --kind claude --pane p -- --permission-mode default "
+        "--settings /x/skills/k8s-crew/config/claude-settings.example.json"
+    ),
+]
+
+
+@network
+@pytest.mark.parametrize("line", CREW_PATH_LINES)
+def test_crew_paths_fail_closed_without_known_skill_dirs(line):
+    problems = tier_problems([Command("boss", line)], load_checker())
+    assert problems and any("no skill folder" in p for p in problems), problems
+
+
+def test_run_paths_drop_unclean_entries():
+    paths = RunPaths.for_run(
+        skill_dirs=["/x/skills/k8s-crew", "relative/k8s-crew", "/a/../b", "/c//d", "/e/"],
+        viewers=["/tmp/run/viewer.kubeconfig", "/tmp/../v", "v"],
+        home="/home/me",
+    )
+    assert paths.skill_dirs == ("/x/skills/k8s-crew",)
+    assert paths.viewers == ("/tmp/run/viewer.kubeconfig", "/home/me/.kube/k8s-crew-viewer")
 
 
 @network
