@@ -34,13 +34,18 @@ my-node-2 is NotReady: its kubelet stopped posting status (confirmed).
 None.
 
 ## Fixes
-1. Bring the node back. This is a host action, not a cluster change: someone with
-   access to my-node-2 checks the kubelet (systemctl status kubelet,
-   journalctl -u kubelet) and restarts it.
+1. Bring the node back. This is a host action on my-node-2, not a cluster change.
+
+   > Proposed fix: review before running. The agent does not run this.
+
+   ```bash
+   ssh my-node-2 sudo systemctl restart kubelet
+   # Undo: none needed; a restart only brings the kubelet back to its configured state
+   ```
 
 2. To get DNS back before the node returns, let CoreDNS run on other nodes.
 
-   > Ask first: the agent runs this only after the user approves it.
+   > Ask first: changes the cluster. Run it yourself after review.
 
    ```bash
    kubectl -n kube-system patch deployment coredns --type json -p '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]'
@@ -57,8 +62,9 @@ The crew did not run these. Run the ones you agree with in your own terminal.
 ````
 
 Shortened, with placeholder names. The report always has these six sections in this
-order. Every fix that changes the cluster comes with a marker line and an `# Undo:`
-line, and the crew runs none of them.
+order. Every fix comes with a marker line and an `# Undo:` line, and the crew runs none
+of them: "Ask first" marks a change you run after review, "Proposed fix" one that needs
+extra review because it is destructive or hard to undo.
 
 ## Install
 
@@ -106,20 +112,34 @@ kubeconfig as above, with `scripts/viewer-kubeconfig.sh` from the plugin's
 
 ## Run it
 
-Start your agent with the viewer kubeconfig, in normal mode (not plan mode):
+Start every crew session with the launcher, in normal mode (not plan mode):
 
 ```bash
-export KUBECONFIG=~/.kube/k8s-crew-viewer
-claude                                             # Claude Code
-<skill-dir>/config/copilot-deny-tools.sh --run     # or Copilot CLI, with the deny rules
+<skill-dir>/scripts/crew-start.sh claude      # Claude Code
+<skill-dir>/scripts/crew-start.sh copilot     # or Copilot CLI
 ```
 
-`<skill-dir>` is the k8s-crew skill folder. Then ask: `/k8s-crew users say my-app is
-timing out`, or describe the problem in your own words. With no description, the crew
-sweeps the whole cluster.
+`<skill-dir>` is the k8s-crew skill folder. Further arguments go to the agent;
+`--viewer PATH` picks another viewer kubeconfig than `~/.kube/k8s-crew-viewer`. Then
+ask: `/k8s-crew users say my-app is timing out`, or describe the problem in your own
+words. With no description, the crew sweeps the whole cluster.
 
-The boss checks the identity first. If the current kubeconfig can write, or can read
-Secrets, it stops and tells you to use the viewer kubeconfig.
+Why a launcher: `export KUBECONFIG=~/.kube/k8s-crew-viewer` alone does not take your
+admin kubeconfig away. It is still on disk, and `kubectl --kubeconfig ~/.kube/config
+...` or `--context <admin>` would use it from inside the session. `crew-start.sh` puts a
+kubectl guard first on `PATH` that refuses any kubeconfig but the viewer one and any
+flag that picks another kubeconfig, context, cluster or identity, and starts the agent
+with the crew's deny rules (your own settings are not changed). Without it, the admin
+kubeconfig is reachable.
+
+The boss checks first. If the session was not started with the launcher, if the
+identity can write or read Secrets (cluster-wide or in any namespace), or if the check
+fails (an expired token, an unreachable cluster), it stops and tells you which, and
+what to do.
+
+`--auto-allow` (`crew-start.sh --auto-allow claude|copilot`) lets the read-only kubectl
+commands run without a prompt. Use it only through the launcher: it relies on the guard
+and the viewer identity, and `copilot-deny-tools.sh` refuses it without the guard.
 
 ## Two modes
 
@@ -139,16 +159,22 @@ both modes.
 
 ## Safety
 
-The crew session holds only the view-only kubeconfig. In subagent mode the helpers
-share the boss's shell, so anything the boss can reach, they can too: giving the
-session only the viewer identity keeps every agent in it read-only. The crew never runs
-a fix. It prints each fix ready to copy, with its `# Undo:` line, and you run it in your
-own terminal with your own access.
+The crew session uses only the view-only kubeconfig, as long as you start it with
+`scripts/crew-start.sh`. In subagent mode the helpers share the boss's shell, so
+anything the boss can reach, they can too: holding the session to the viewer identity
+keeps every agent in it read-only. The crew never runs a fix. It prints each fix ready
+to copy, with its `# Undo:` line, and you run it in your own terminal with your own
+access.
 
-Four layers keep it that way: the instructions, the investigator's tool limits, the
-example command rules in `config/`, and the RBAC of the viewer identity. Only the RBAC
-is a hard lock; the command rules cannot match every form of a command. The viewer
-identity cannot read Secrets.
+Five layers keep it that way: the instructions, the investigator's tool limits, the
+command rules in `config/`, the kubectl guard, and the RBAC of the viewer identity. The
+command rules cannot match every form of a command. The guard and the RBAC are the
+locks, and the RBAC holds only while the session cannot reach other credentials: an
+agent that runs a kubectl binary by its full path skips the guard (Claude Code denies
+that form, Copilot cannot), and then uses whatever kubeconfig it can read. Keep your
+admin kubeconfig out of the session's reach where you can, for example by running crew
+sessions as a separate OS user or in a container that has only the viewer kubeconfig.
+The viewer identity cannot read Secrets.
 
 Details, including what the RBAC grants and leaves out and the limits of the Copilot
 rules: [docs/safety.md](docs/safety.md). Things that tend to go wrong:

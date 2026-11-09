@@ -47,9 +47,13 @@ How transcripts are captured, and their limits: `docs/transcripts.md`.
 - **Never copy a k8s-skills skill.** Depend on it. Copying scripts from k8s-skills is fine.
 - k8s-skills pin: `K8S_SKILLS_REF=v0.10.0` in `tests/versions.env`. The command
   allow-list and checker come from that ref, fetched into `.cache/k8s-skills-<ref>/`
-  (git-ignored).
-- The crew session only ever has the view-only identity. The crew never runs a fix; it
-  prints each fix with an `# Undo:` line for the user to run.
+  (git-ignored). `tools/crewcheck` and `tools/transcript.py` call private functions of
+  the pinned checker (`_parse_markdown`, `_check_lines`, `_scan`, `_check_filter`, ...)
+  and map the crew's ask-first marker to its `ASK_MARKER`: check them when you bump the
+  pin.
+- The crew session only ever has the view-only identity: sessions start with
+  `scripts/crew-start.sh`, which puts `scripts/kubectl-guard` first on `PATH`. The crew
+  never runs a fix; it prints each fix with an `# Undo:` line for the user to run.
 - Helpers: default 3, max 4 (Claude Code subagents and herdr); Copilot CLI subagent mode
   default 2.
 - Test cluster name `k8s-crew-test`, context `kind-k8s-crew-test`. Scripts refuse to run

@@ -6,11 +6,18 @@ limits are.
 
 ## The short version
 
-- Start the crew session with a view-only kubeconfig and nothing else.
+- Start every crew session with `<skill-dir>/scripts/crew-start.sh claude|copilot`.
+  Setting `KUBECONFIG` to the viewer file is not enough: without the launcher, your
+  admin kubeconfig (`~/.kube/config`) is still reachable from the session with
+  `kubectl --kubeconfig` or `--context`.
+- The launcher puts a kubectl guard first on `PATH` that refuses every kubeconfig but
+  the viewer one and every flag that picks another kubeconfig, context, cluster or
+  identity, and starts the agent with the crew's deny rules.
 - The crew prints every fix with an `# Undo:` line. You run the fixes you agree with, in
   your own terminal, with your own access.
-- The command rules in `config/` are a second line of defence. The Kubernetes RBAC of
-  the viewer identity is the real lock.
+- The Kubernetes RBAC of the viewer identity refuses writes. It protects the cluster
+  only while the session cannot reach other credentials, so keep your admin kubeconfig
+  out of the session's reach where you can (see [Residual risk](#residual-risk)).
 
 ## Why the whole session is view-only
 
@@ -22,10 +29,27 @@ helper could use it, whatever its instructions say.
 So the crew session gets only the view-only identity, in both modes. Then RBAC stops a
 write from any agent in the session, not only from the boss.
 
+"Only the view-only identity" means more than `KUBECONFIG`. Your admin kubeconfig stays
+on disk, and a cloud CLI login can mint a new one. `scripts/crew-start.sh` holds the
+session to the viewer:
+
+- It installs `scripts/kubectl-guard` as `kubectl` in a private temp folder first on
+  `PATH`. The guard runs the real kubectl only when `KUBECONFIG` is exactly the viewer
+  file (not a list), and refuses `--kubeconfig`, `--context`, `--cluster`, `--server`
+  and `-s` (also attached, like `-shttps://...`), `--token`, `--user`, `--username`,
+  `--password`, `--as`, `--as-group`, `--as-uid`, the client certificate and key flags
+  and `--kuberc`, wherever they appear. It exits 126 with a message that tells the agent
+  to stop and tell you.
+- It exports `PATH`, `KUBECONFIG` and `K8S_CREW_GUARD`. The preflight refuses to start
+  the crew unless the guard is active.
+- It starts the agent with the crew's deny rules (see [Five layers](#five-layers)),
+  passed on the command line; your own settings files are not changed.
+
 In herdr mode each helper is its own agent in its own pane. A new herdr pane does not
-inherit the boss's shell environment, so the boss sets `KUBECONFIG` to the viewer
-kubeconfig in every helper pane and runs the preflight there before it starts the
-helper.
+inherit the boss's shell environment, so the boss runs
+`scripts/crew-start.sh --viewer <path> shell` in every helper pane (a bash with the
+guard and the viewer `KUBECONFIG`), runs the preflight there, and only then starts the
+helper, Claude helpers with the same deny settings.
 
 ## Create and select the viewer kubeconfig
 
@@ -47,11 +71,19 @@ cluster you want to triage:
 3. writes a kubeconfig that holds only that token, the cluster's address and its CA,
    with file mode 600. It never prints the token.
 
+The script reads your current context's cluster entry with
+`kubectl config view --raw --minify --flatten`, so a CA given as a file (also a
+relative path) is copied in, and it keeps `tls-server-name` and `proxy-url`. It refuses
+an `https` server with no CA, unless your context sets `insecure-skip-tls-verify`, which
+it then keeps and warns about. It checks this before it changes anything in the
+cluster.
+
 Then start the crew session with it:
 
 ```bash
-export KUBECONFIG=~/.kube/k8s-crew-viewer
-claude          # or: <skill-dir>/config/copilot-deny-tools.sh --run
+<skill-dir>/scripts/crew-start.sh claude                  # Claude Code
+<skill-dir>/scripts/crew-start.sh copilot                 # Copilot CLI
+<skill-dir>/scripts/crew-start.sh --viewer /path/to/viewer.kubeconfig claude
 ```
 
 When the token expires, run the script again. To remove the identity from the cluster,
@@ -64,12 +96,22 @@ rm ~/.kube/k8s-crew-viewer
 
 ## The preflight refuses a writable identity
 
-Before the boss runs anything against the cluster it runs `scripts/preflight.sh`. The
-script asks the API server, with `kubectl auth can-i`, whether the current identity can
-create Deployments, delete pods, patch nodes, or read Secrets. If any answer is not a
-plain `no` (including an error or no answer), the crew stops with `NOT view-only` and
-tells you to create the viewer kubeconfig. It fails closed: an unreachable cluster
-blocks the run too.
+Before the boss runs anything against the cluster it runs `scripts/preflight.sh`. It
+fails closed: whatever it cannot confirm blocks the crew.
+
+1. It checks the kubectl guard is active (`K8S_CREW_GUARD` is set and `kubectl` on
+   `PATH` is the guard). If not: exit 6, `kubectl guard not active`.
+2. It asks the API server, with `kubectl auth can-i`, whether the identity can create
+   Deployments, delete pods, patch nodes or read Secrets across the cluster, and then
+   whether it can create Deployments, delete pods or read Secrets in each namespace it
+   can list. The second round catches rights a RoleBinding gives in one namespace,
+   which the cluster-wide questions do not see. It costs three API calls per namespace,
+   once per session.
+3. A denial is `no`, or `no - <reason>` when the authorizer gives one (webhook
+   authorizers such as AKS Azure RBAC do). Any other answer: exit 3, `NOT view-only`.
+4. When kubectl prints no answer at all (an expired token, an unreachable cluster, the
+   guard refused the call): exit 5, `cannot check identity`, with kubectl's first error
+   line. The boss then tells you the check failed, not that the identity can write.
 
 ## How fixes are handed over
 
@@ -81,10 +123,10 @@ You read the report, decide, and run each fix in your own terminal with your own
 access. If you ask the crew to apply a fix, it tells you the session is view-only by
 design and points you to the command. The crew does not ask you for more access.
 
-## Four layers
+## Five layers
 
-Only the last layer is a hard lock. The others make it less likely that an agent ever
-reaches it.
+The guard and the RBAC are the locks. The others make it less likely that an agent ever
+reaches them.
 
 1. Instructions. The investigator role (`roles/investigator.md`) says: investigate
    only, run only read-only commands, one plain command per call, never run a command
@@ -94,18 +136,26 @@ reaches it.
    (`agents/k8s-crew-investigator.md`) has only shell, read and search tools. It cannot
    edit or write files and cannot start other agents. herdr helpers have no agent
    definition, so the hard rules are written into their prompt instead.
-3. Command rules. Example rules that deny kubectl write commands and Secret reads:
-   - Claude Code: `config/claude-settings.example.json`, a `permissions.deny` list.
-     Merge it into your `~/.claude/settings.json` or a project's
-     `.claude/settings.json`, or pass it with `claude --settings <file>`.
+3. Command rules, which `scripts/crew-start.sh` passes to the agent. Both deny the same
+   kubectl commands: every one that is not read-only, and Secret reads.
+   - Claude Code: `config/claude-settings.example.json`, a `permissions.deny` list,
+     passed with `claude --settings`. It also denies the identity flags anywhere in a
+     kubectl command, kubectl by its full path, `KUBECONFIG=` and `PATH=` overrides,
+     shell commands that name a `.kube` folder, and `Read` of `~/.kube/**`, the agents'
+     settings, credential and session files, and the `gh`, `az`, `aws` and `gcloud`
+     logins. Skill, agent and plugin folders under `~/.claude` stay readable: the crew
+     reads its recipe there.
    - Copilot CLI: `config/copilot-deny-tools.sh --run` starts `copilot` with a
-     `--deny-tool` rule for every kubectl command that is not read-only, and for Secret
-     reads.
+     `--deny-tool` rule for every kubectl command that is not read-only, Secret reads,
+     the identity flags when they come first, and reads of the same private files.
 
    Both vendors match commands as text, and both warn that this is fragile. See
    [Limits of the command rules](#limits-of-the-command-rules).
-4. RBAC. The viewer identity can read and nothing else. Whatever an agent types, the
-   API server refuses a write. This is the layer to rely on.
+4. The kubectl guard (`scripts/kubectl-guard`), described in
+   [Why the whole session is view-only](#why-the-whole-session-is-view-only). It checks
+   every kubectl call at run time, whatever form the command has.
+5. RBAC. The viewer identity can read and nothing else. Whatever an agent types through
+   the guard, the API server refuses a write.
 
 ## The RBAC
 
@@ -119,8 +169,8 @@ Envoy Gateway, Velero and CloudNativePG.
 
 It is a trimmed copy of the identity the k8s-skills test kit uses. Left out on purpose:
 
-- Secrets. `view` does not grant them, and the extra role never names them. No
-  agent in the session can read a Secret.
+- Secrets. `view` does not grant them, and the extra role never names them. No agent
+  in the session can read a Secret with the viewer identity.
 - `services/proxy`. The k8s-skills kit grants it for the Prometheus, Alertmanager
   and Envoy admin APIs. RBAC cannot limit the path behind the proxy, and Envoy's admin
   interface can show its full configuration and certificates. The triage scenarios do
@@ -129,6 +179,9 @@ It is a trimmed copy of the identity the k8s-skills test kit uses. Left out on p
   data, but the test for this file refuses any resource named like a Secret, and the
   triage scenarios do not need them. This may come back with a narrower test.
 - Velero DownloadRequests. Their status holds a signed URL to a backup's files.
+
+Kept, with a cost: `monitoring.coreos.com/*` includes AlertmanagerConfig, whose plain
+`url` fields can carry webhook tokens.
 
 The cost: the Prometheus, Envoy and External Secrets specialist skills see less under
 the crew viewer than under the k8s-skills test identity. They say what they could not
@@ -144,16 +197,38 @@ The command rules catch common mistakes. They are not a lock:
   the subcommand (`kubectl -n my-namespace delete ...`) is not matched by any deny rule.
   So `copilot-deny-tools.sh` is deny-only by default: Copilot asks you before each other
   kubectl call, and you see the command before it runs.
-- `--auto-allow` (`copilot-deny-tools.sh --auto-allow --run`) also allows
+- `--auto-allow` (`crew-start.sh --auto-allow copilot`) also allows
   `shell(kubectl:*)`, so kubectl calls run without asking. Then a flag before the
-  subcommand gets past the deny list, and only the view-only identity protects the
-  cluster. Use it only with the crew viewer kubeconfig.
+  subcommand gets past the subcommand deny list, and the guard and the viewer identity
+  protect the cluster. It is acceptable only under the launcher: `copilot-deny-tools.sh`
+  refuses `--auto-allow` unless the guard is active. `crew-start.sh --auto-allow claude`
+  allows the read-only kubectl commands, the pipe filters and the preflight in the same
+  way.
 - Claude Code permission rules also match command text; a command written in an
   unusual form can slip past them.
 - Plugin agents ignore `permissionMode`. When the investigator comes from the
   Claude Code plugin, Claude Code ignores any `permissionMode` in its definition. The
   deny rules in `config/` and the session's own permission settings still apply, so set
   them up for plugin installs too.
+
+## Residual risk
+
+The guard is a net, not a sandbox:
+
+- A program that calls a kubectl binary by its full path (`/usr/local/bin/kubectl`)
+  does not pass through the guard. Claude Code's rules deny that form; Copilot's rules
+  cannot match it. Other tools that talk to the API server (`curl` with a token, a
+  script) skip it too.
+- Then only the RBAC of whatever identity the agent finds protects the cluster. The
+  viewer's RBAC holds only if the admin kubeconfig and other credentials are not
+  readable from the session. The read denies cover the usual places, not every file.
+- So where you can, keep the admin kubeconfig out of the session's reach: run crew
+  sessions as a separate OS user, or in a container or VM that has only the viewer
+  kubeconfig, and keep cloud CLI logins out of it.
+
+The test kit's hard check fails any run whose transcript holds a command that is not
+an allow-listed cluster command or one of the crew's own local commands, so such an
+attempt does not pass a release check unnoticed.
 
 ## Prompts and approvals
 
@@ -173,5 +248,6 @@ starts Claude helpers with `--permission-mode default` for the same reason.
 
 How you run your agent, and with which permissions, is your decision and your risk.
 The crew is written and tested to stay read-only, but instructions and command rules
-are not a guarantee. The viewer identity is. Do not start a crew session with any other
-kubeconfig.
+are not a guarantee. The guard and the viewer identity are, as far as the session
+cannot reach other credentials. Start crew sessions only with `scripts/crew-start.sh`,
+and do not start one with any other kubeconfig.

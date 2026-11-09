@@ -5,6 +5,17 @@ to do. Versions: Claude Code 2.1, Copilot CLI 1.0.107, herdr 0.9.
 
 ## Starting a session
 
+### Start through `crew-start.sh`
+
+`export KUBECONFIG=~/.kube/k8s-crew-viewer` and then `claude` is not enough: your admin
+kubeconfig is still reachable with `--kubeconfig` or `--context`. Start every crew
+session with `<skill-dir>/scripts/crew-start.sh claude` (or `copilot`). If you do not,
+the preflight exits 6 with `kubectl guard not active` and the crew does not start.
+
+The guard is refused too when something in the session changes `KUBECONFIG` or puts
+another kubectl before it on `PATH`. In a herdr pane, `crew-start.sh ... shell` starts
+bash without your startup files for that reason.
+
 ### Plan mode turns answers into plans
 
 In Claude Code, a session in plan mode keeps every subagent in plan mode. Investigators
@@ -43,13 +54,23 @@ The boss never falls back to a general-purpose subagent: it would lose the tool 
 ### The viewer token expires
 
 The token in the viewer kubeconfig is valid for 8 hours. After that every command fails
-with `Unauthorized` and the preflight blocks the run. Run
-`scripts/viewer-kubeconfig.sh` again, with your admin context.
+with `Unauthorized`, and the preflight exits 5 with `cannot check identity` (the same
+happens when the cluster cannot be reached). The agents are told to stop on
+`Unauthorized`, not to look for another identity. Run `scripts/viewer-kubeconfig.sh`
+again in your own terminal, with your admin context, and start a new session with
+`scripts/crew-start.sh`.
 
-`viewer-kubeconfig.sh` copies the cluster's address and CA from your current context. It
-does not copy `tls-server-name` or `proxy-url`, and a CA given as a relative file path
-is skipped. If the viewer kubeconfig cannot connect while your own does, compare the
-two cluster entries.
+`viewer-kubeconfig.sh` copies the cluster entry of your current context with
+`--flatten` (a CA file, also a relative one, is copied in), including
+`tls-server-name` and `proxy-url`. It refuses an `https` server without a CA unless
+your context sets `insecure-skip-tls-verify`. If the viewer kubeconfig still cannot
+connect while your own does, compare the two cluster entries.
+
+### The preflight is slow on a cluster with many namespaces
+
+The preflight asks three `can-i` questions in every namespace, to find rights a
+RoleBinding gives in one namespace. On a cluster with hundreds of namespaces this takes
+a while, once per session.
 
 ## Copilot CLI
 
@@ -72,8 +93,10 @@ Checked with Copilot CLI 1.0.107:
 
 So `config/copilot-deny-tools.sh` is deny-only by default and Copilot asks you before
 each other kubectl call. `--auto-allow` adds `shell(kubectl:*)`; then a flag before the
-subcommand gets past the deny list, and only the view-only identity protects the
-cluster. Details in [safety.md](safety.md#limits-of-the-command-rules).
+subcommand gets past the subcommand deny list, and the kubectl guard and the view-only
+identity protect the cluster. That is why `--auto-allow` is refused unless the session
+runs under `scripts/crew-start.sh`. Details in
+[safety.md](safety.md#limits-of-the-command-rules).
 
 ### "blocked" for a few seconds at startup
 
@@ -116,12 +139,12 @@ command was denied.
 
 ## herdr mode
 
-### Helper panes do not inherit `KUBECONFIG`
+### Helper panes do not inherit `KUBECONFIG` or the guard
 
 A new herdr pane starts from the herdr server's environment, not from the boss's shell.
-A helper started there would use your default kubeconfig. The herdr runner exports the
-boss's `KUBECONFIG` in each helper pane and runs the preflight there before it starts
-the helper. If you start a helper by hand, do the same.
+A helper started there would use your default kubeconfig. The herdr runner runs
+`scripts/crew-start.sh --viewer <path> shell` in each helper pane, then the preflight,
+before it starts the helper. If you start a helper by hand, do the same.
 
 ### Prompts must not contain `$`, backticks or quotes
 

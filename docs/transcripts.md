@@ -1,9 +1,12 @@
 # Run transcripts
 
 `tests/crew.sh` saves, for every run, a transcript of every shell command the session
-and its subagents asked to run. `tests/score.sh` checks each cluster command in it
-against the run-freely tier of the pinned k8s-skills allow-list. The check is script-only
-and fails closed.
+and its subagents asked to run. `tests/score.sh` checks every command in it: each piece
+must be a cluster command in the run-freely tier of the pinned k8s-skills allow-list, or
+one of the few local commands a crew run uses (the pipe filters reading stdin, the
+herdr subcommands of `runners/herdr.md`, `preflight.sh`, `crew-start.sh`, `printenv`
+with one variable name). Anything else, such as `docker`, `ssh`, `curl` or
+`systemctl`, fails the run. The check is script-only and fails closed.
 
 ## Normalized format
 
@@ -82,12 +85,18 @@ runs, the ways an agent could reach another cluster or read local credentials:
   `--as-group`, `--as-uid` and the client-certificate flags anywhere in the command.
   Calling kubectl by absolute path would bypass it; Claude's allow rules do not match
   such a call, Copilot's `shell(kubectl:*)` might, and the tier check still flags it.
-- **Claude Code:** `--disallowedTools` rules, which win over the allow rules (checked
+  The guard is `scripts/kubectl-guard`, the same one `scripts/crew-start.sh` gives a
+  user's session; the test kit installs it with `kubectl-guard install`.
+- **Claude Code:** `--settings config/claude-settings.example.json` (the product's
+  deny rules) and `--disallowedTools` rules, which win over the allow rules (checked
   with `claude -p` in dontAsk mode): `Bash(kubectl *--context*)` and the like for every
   flag above, and `Read(//<path>/**)` for `~/.kube`, `~/.claude`, `~/.copilot`,
   `~/.config/gh`, and the repository's `.kube`, `tests` (the scenario answers) and
   `runs`. Pipe filters cannot write files: `yq` is not allowed, `sort -o`/`--output` and
   `uniq IN OUT` are denied.
+- **Copilot tools:** a tool request that is neither a known shell tool nor a known
+  non-shell tool (`view`, `grep`, `glob`, `task`, `skill`, ...) makes the transcript
+  unavailable, so a new or renamed shell tool cannot drop commands from the check.
 - **Copilot CLI** (checked with 1.0.107): allow rules cannot name a kubectl subcommand
   (`shell(kubectl get:*)` allows nothing) and rules match only a command's leading words
   (`shell(echo *--context*)` denies nothing). So Copilot gets `shell(kubectl:*)` plus a
