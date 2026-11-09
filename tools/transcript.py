@@ -148,12 +148,104 @@ def _scan(line: str, separators: tuple[str, ...]) -> list[str]:
 
 
 _EXPANDS = re.compile(r"[A-Za-z_{(\[0-9@*#?!$'\"-]")
-# jq builtins that read files or the environment: the pinned checker only checks jq's
-# flags and arguments, not its program.
-_JQ_READS = re.compile(
-    r"(?<![\w.$])(import|include|env|input_filename|get_search_list)(?!\w)"
-    r"|\$(ENV|__loc__|__prog_args)(?!\w)"
+# jq builtins that read files, more input or the environment: the pinned checker only
+# checks jq's flags and arguments, not its program.
+_JQ_BUILTINS = frozenset(
+    {
+        "env",
+        "input",
+        "inputs",
+        "import",
+        "include",
+        "input_filename",
+        "get_search_list",
+        "$ENV",
+        "$__loc__",
+        "$__prog_args",
+    }
 )
+_JQ_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*")
+_JQ_NUMBER = re.compile(r"\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
+_JQ_ANY = re.compile(r"(?<![\w.])(" + "|".join(re.escape(b) for b in _JQ_BUILTINS) + r")(?!\w)")
+_JQ_PAIRS = {"{": "}", "[": "]", "(": ")"}
+
+
+def _jq_tokens(program: str) -> list[tuple[str, str]] | str:
+    """jq tokens (kind, text), or the problem. Strings and comments are skipped."""
+    tokens: list[tuple[str, str]] = []
+    i, n = 0, len(program)
+    while i < n:
+        c = program[i]
+        if c.isspace():
+            i += 1
+        elif c == "#":
+            end = program.find("\n", i)
+            i = n if end < 0 else end
+        elif c == '"':
+            j, interpolated = i + 1, False
+            while j < n and program[j] != '"':
+                if program[j] == "\\":
+                    interpolated |= program[j + 1 : j + 2] == "("
+                    j += 2
+                else:
+                    j += 1
+            if j >= n:
+                return "jq program cannot be checked: unterminated string"
+            # "\(...)" holds code; fail closed if it names a builtin anywhere.
+            if interpolated and _JQ_ANY.search(program[i + 1 : j]):
+                return "jq program reads files or the environment"
+            tokens.append(("str", program[i + 1 : j]))
+            i = j + 1
+        elif c in "$." and (ident := _JQ_IDENT.match(program, i + 1)):
+            tokens.append(("var" if c == "$" else "field", c + ident.group()))
+            i = ident.end()
+        elif ident := _JQ_IDENT.match(program, i):
+            tokens.append(("ident", ident.group()))
+            i = ident.end()
+        elif number := _JQ_NUMBER.match(program, i):
+            tokens.append(("num", number.group()))
+            i = number.end()
+        else:
+            tokens.append(("op", c))
+            i += 1
+    return tokens
+
+
+def jq_program_problem(program: str) -> str | None:
+    """Why a jq program may not run, or None.
+
+    A builtin in _JQ_BUILTINS counts only where jq would call it: not as a field
+    (``.env``, ``?.env``), an object key (``{env: ...}``, the shorthand ``{env}``) or
+    inside a string or comment. Anything that does not scan (an unterminated string,
+    unbalanced brackets) fails closed.
+    """
+    tokens = _jq_tokens(program)
+    if isinstance(tokens, str):
+        return tokens
+    stack: list[str] = []
+    expect_key = False
+    for index, (kind, text) in enumerate(tokens):
+        after = tokens[index + 1] if index + 1 < len(tokens) else ("", "")
+        if kind == "op" and text in _JQ_PAIRS:
+            stack.append(text)
+            expect_key = text == "{"
+            continue
+        if kind == "op" and text in _JQ_PAIRS.values():
+            if not stack or _JQ_PAIRS[stack.pop()] != text:
+                return "jq program cannot be checked: unbalanced brackets"
+            expect_key = False
+            continue
+        if kind == "op" and text == "," and stack and stack[-1] == "{":
+            expect_key = True
+            continue
+        at_key, expect_key = expect_key, False
+        if at_key and kind == "ident" and after in (("op", ":"), ("op", ","), ("op", "}")):
+            continue
+        if kind in ("ident", "var") and text in _JQ_BUILTINS:
+            return "jq program reads files or the environment"
+    if stack:
+        return "jq program cannot be checked: unbalanced brackets"
+    return None
 
 
 class _Control(Exception):
@@ -253,12 +345,22 @@ def checkable(segments: list[list[str]]) -> str:
 
 
 def _jq_problems(segments: list[list[str]]) -> list[str]:
+    problems: list[str] = []
     for words in segments:
-        if words and words[0] == "jq":
-            for arg in words[1:]:
-                if not arg.startswith("-") and _JQ_READS.search(arg):
-                    return ["jq program reads files or the environment"]
-    return []
+        if not words or words[0] != "jq":
+            continue
+        args = iter(words[1:])
+        for arg in args:
+            if arg == "--arg":
+                next(args, None)
+                next(args, None)
+            elif not arg.startswith("-"):
+                # The first positional is the program; any other is a file, which the
+                # pinned filter rules refuse.
+                if problem := jq_program_problem(arg):
+                    problems.append(problem)
+                break
+    return problems
 
 
 def split_command(line: str) -> list[str]:

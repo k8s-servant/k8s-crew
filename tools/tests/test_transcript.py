@@ -1,4 +1,5 @@
 import os
+import shlex
 from pathlib import Path
 
 import pytest
@@ -488,3 +489,64 @@ def test_shell_words_refuses_comments_newlines_and_arithmetic():
         ["kubectl", "get", "pods", "-o", 'jsonpath={"\\n"}']
     ]
     assert shell_words("kubectl get pods -l a#b") == [["kubectl", "get", "pods", "-l", "a#b"]]
+
+
+# runs/node-dns-cascade/claude-subagents-2: `env` as a field name, an object-key
+# shorthand or a string is not the jq env builtin.
+JQ_FIELD_READS = [
+    (
+        "kubectl get deployment my-app -n my-namespace -o json | jq '.spec.replicas, "
+        ".spec.template.spec.containers[] | {name, image, readinessProbe, livenessProbe, "
+        "ports, env, command, args}'"
+    ),
+    (
+        "kubectl get deployment my-app -n my-namespace -o json | jq '{replicas: .spec.replicas, "
+        "selector: .spec.selector, containers: [.spec.template.spec.containers[] | {name, "
+        "image, readinessProbe, livenessProbe, startupProbe, ports, env, command, args}]}'"
+    ),
+    "kubectl get pods -o json | jq '.items[].spec.containers[].env'",
+    "kubectl get pods -o json | jq '.items[0]?.env'",
+    "kubectl get pods -o json | jq '{env: .spec.env, input: 1, import: 2}'",
+    'kubectl get pods -o json | jq \'.items[] | select(.name == "env") | ."env"\'',
+    "kubectl get pods -o json | jq '.[\"inputs\"] # env in a comment'",
+    "kubectl get pods -o json | jq '.items[] | .metadata.name | ascii_downcase'",
+]
+
+
+@network
+@pytest.mark.parametrize("line", JQ_FIELD_READS)
+def test_jq_field_names_are_not_builtins(line):
+    assert tier_problems([Command("boss", line)], load_checker(), PATHS) == []
+
+
+JQ_BUILTIN_READS = [
+    "env",
+    "$ENV.HOME",
+    "env.HOME",
+    "[inputs]",
+    "input",
+    'import "x" as y; .',
+    'include "x"; .',
+    ". as $x | env",
+    "input_filename",
+    "get_search_list",
+    "$__loc__",
+    "$__prog_args",
+    "{a: env}",
+    "{(env | tostring): 1}",
+    "{$ENV}",
+    '"\\(env.HOME)"',
+    ".x | [env]",
+    "def f: env; f",
+    '"unterminated',
+    "{a: (.b}",
+    ".a ]",
+]
+
+
+@network
+@pytest.mark.parametrize("program", JQ_BUILTIN_READS)
+def test_jq_builtins_that_read_still_fail(program):
+    line = "kubectl get pods -o json | jq " + shlex.quote(program)
+    problems = tier_problems([Command("boss", line)], load_checker(), PATHS)
+    assert any("jq program" in p for p in problems), (program, problems)
