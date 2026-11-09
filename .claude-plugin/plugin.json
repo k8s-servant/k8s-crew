@@ -1,6 +1,6 @@
 {
   "name": "k8s-crew",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A Kubernetes triage crew: one lead agent splits a cluster problem between read-only helper agents and writes one report. Never changes the cluster",
   "author": {
     "name": "k8s-servant",
@@ -9,8 +9,19 @@
   "homepage": "https://github.com/k8s-servant/k8s-crew",
   "repository": "https://github.com/k8s-servant/k8s-crew",
   "license": "Apache-2.0",
-  "keywords": ["kubernetes", "troubleshooting", "triage", "subagents"],
-  "skills": ["./skills/"],
-  "agents": ["./skills/k8s-crew/agents/k8s-crew-investigator.md"],
-  "dependencies": ["k8s-skills@k8s-skills"]
+  "keywords": [
+    "kubernetes",
+    "troubleshooting",
+    "triage",
+    "subagents"
+  ],
+  "skills": [
+    "./skills/"
+  ],
+  "agents": [
+    "./skills/k8s-crew/agents/k8s-crew-investigator.md"
+  ],
+  "dependencies": [
+    "k8s-skills@k8s-skills"
+  ]
 }
