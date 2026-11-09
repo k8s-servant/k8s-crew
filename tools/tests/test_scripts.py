@@ -8,6 +8,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SKILL = ROOT / "skills" / "k8s-crew"
 SCRIPTS = SKILL / "scripts"
@@ -47,14 +49,24 @@ def make_env(tmp_path, can_i="no"):
     return env, home
 
 
-def run(script, args, env):
+def run(script, args, env, cwd=None):
     return subprocess.run(
         ["bash", str(SCRIPTS / script), *args],
         capture_output=True,
         text=True,
         env=env,
         check=False,
+        cwd=cwd,
     )
+
+
+def make_project(tmp_path):
+    """A git repository with a nested working folder, outside the real repository."""
+    project = tmp_path / "project"
+    work = project / "src" / "deep"
+    work.mkdir(parents=True)
+    subprocess.run(["git", "init", "--quiet", str(project)], check=True)
+    return project, work
 
 
 def test_rbac_never_mentions_secrets():
@@ -137,3 +149,62 @@ def test_viewer_kubeconfig_writes_token_only_file(tmp_path):
     log = (tmp_path / "log").read_text()
     assert "create token crew-viewer -n k8s-crew --duration 8h" in log
     assert "apply -f" in log
+
+
+def test_preflight_finds_claude_agent_in_project(tmp_path):
+    env, _ = make_env(tmp_path)
+    project, work = make_project(tmp_path)
+    agents = project / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "k8s-crew-investigator.md").write_text("x")
+    res = run("preflight.sh", ["--subagents", "--platform", "claude"], env, cwd=work)
+    assert res.returncode == 0, res.stdout
+    assert "viewer ok" in res.stdout
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        ".github/agents/k8s-crew-investigator.agent.md",
+        ".github/agents/k8s-crew-investigator.md",
+        ".claude/agents/k8s-crew-investigator.md",
+        ".claude/agents/k8s-crew-investigator.agent.md",
+    ],
+)
+def test_preflight_finds_copilot_agent_in_project(tmp_path, rel):
+    env, _ = make_env(tmp_path)
+    project, work = make_project(tmp_path)
+    target = project / rel
+    target.parent.mkdir(parents=True)
+    target.write_text("x")
+    res = run("preflight.sh", ["--subagents", "--platform", "copilot"], env, cwd=work)
+    assert res.returncode == 0, res.stdout
+
+
+def test_preflight_copilot_home_agent_without_suffix(tmp_path):
+    env, home = make_env(tmp_path)
+    target = home / ".copilot" / "agents" / "k8s-crew-investigator.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("x")
+    res = run("preflight.sh", ["--subagents", "--platform", "copilot"], env, cwd=tmp_path)
+    assert res.returncode == 0, res.stdout
+
+
+def test_preflight_claude_ignores_github_agents(tmp_path):
+    env, _ = make_env(tmp_path)
+    project, work = make_project(tmp_path)
+    target = project / ".github" / "agents" / "k8s-crew-investigator.agent.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("x")
+    res = run("preflight.sh", ["--subagents", "--platform", "claude"], env, cwd=work)
+    assert res.returncode == 4
+
+
+@pytest.mark.parametrize("platform", ["claude", "copilot"])
+def test_preflight_agent_not_found_anywhere(tmp_path, platform):
+    env, _ = make_env(tmp_path)
+    _project, work = make_project(tmp_path)
+    res = run("preflight.sh", ["--subagents", "--platform", platform], env, cwd=work)
+    assert res.returncode == 4
+    assert "investigator agent missing" in res.stdout
+    assert "install-agents.sh" in res.stdout

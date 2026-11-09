@@ -20,8 +20,9 @@ investigators look; you coordinate and conclude. **The crew never runs a fix**: 
 change is handed to the user, ready to run in their own terminal, with its undo.
 
 Every path below (`scripts/`, `recipes/`, `roles/`, `runners/`, `config/`, `rbac/`) is
-relative to the folder this `SKILL.md` is in. Run the scripts from that folder or with
-their full path.
+relative to the folder this `SKILL.md` is in. Run a script by its full path, from the
+session's own working folder: do not `cd` first. The preflight looks for a
+project-level investigator from the working folder up to the git root.
 
 ## 1. Pick the mode
 

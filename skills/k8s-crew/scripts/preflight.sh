@@ -33,14 +33,57 @@ if [[ "$blocked" -ne 0 ]]; then
   exit 3
 fi
 
+# Folders from $PWD up to the git root (only $PWD outside a git repository), nearest first.
+project_dirs() {
+  local dir top
+  dir="$(pwd -P)"
+  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  [[ -n "$top" ]] && top="$(cd "$top" && pwd -P)"
+  while :; do
+    echo "$dir"
+    [[ -z "$top" || "$dir" == "$top" || "$dir" == / ]] && break
+    dir="$(dirname "$dir")"
+  done
+}
+
+# Every place the platform loads the investigator from, in the order it looks.
+candidates() {
+  local dir
+  case "$platform" in
+    claude)
+      while IFS= read -r dir; do
+        echo "$dir/.claude/agents/k8s-crew-investigator.md"
+      done < <(project_dirs)
+      echo "$HOME/.claude/agents/k8s-crew-investigator.md"
+      ;;
+    copilot)
+      echo "$HOME/.copilot/agents/k8s-crew-investigator.agent.md"
+      echo "$HOME/.copilot/agents/k8s-crew-investigator.md"
+      while IFS= read -r dir; do
+        for sub in .github/agents .claude/agents; do
+          echo "$dir/$sub/k8s-crew-investigator.agent.md"
+          echo "$dir/$sub/k8s-crew-investigator.md"
+        done
+      done < <(project_dirs)
+      ;;
+  esac
+}
+
 if [[ "$subagents" == true ]]; then
   case "$platform" in
-    claude) agent="$HOME/.claude/agents/k8s-crew-investigator.md" ;;
-    copilot) agent="$HOME/.copilot/agents/k8s-crew-investigator.agent.md" ;;
+    claude|copilot) ;;
     *) echo "--subagents needs --platform claude|copilot" >&2; exit 2 ;;
   esac
-  if [[ ! -e "$agent" ]]; then
-    echo "investigator agent missing: $agent"
+  found=""
+  while IFS= read -r agent; do
+    if [[ -e "$agent" ]]; then
+      found="$agent"
+      break
+    fi
+  done < <(candidates)
+  if [[ -z "$found" ]]; then
+    echo "investigator agent missing: not found in any $platform agent folder:"
+    candidates | sed 's/^/  /'
     echo "run scripts/install-agents.sh"
     exit 4
   fi
