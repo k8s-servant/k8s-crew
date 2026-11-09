@@ -530,3 +530,43 @@ def test_herdr_prompt_carries_the_evidence_rules():
     text = (ROOT / HERDR).read_text(encoding="utf-8")
     for rule in ("no speculative weaknesses", "confirmed only", "never a knock-on effect"):
         assert rule in text, rule
+
+
+AGENT_FILE = f"{SKILL}/agents/k8s-crew-investigator.md"
+SKILL_SUMMARY_RULES = [
+    "no speculative weaknesses",
+    "`confirmed` only with a command result shown",
+    "a timestamp alone is not a recent change",
+    "fixes for the cause and not its knock-on effects",
+]
+
+
+@network
+@pytest.mark.parametrize("needle", SKILL_SUMMARY_RULES)
+def test_skill_summary_carries_the_evidence_rules(tmp_path, needle):
+    repo = make_repo(tmp_path)
+    path = repo / SKILL / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert needle in text
+    path.write_text(text.replace(needle, "x"), encoding="utf-8")
+    assert any(m.startswith(f"{SKILL}/SKILL.md") and needle in m for m in messages(repo))
+
+
+@network
+@pytest.mark.parametrize("needle", EVIDENCE_RULES[ROLE])
+def test_generated_agent_carries_the_evidence_rules(tmp_path, needle):
+    """Checked on the agent file itself, not only through the role it is built from."""
+    repo = make_repo(tmp_path)
+    path = repo / AGENT_FILE
+    text = path.read_text(encoding="utf-8")
+    assert needle in text
+    path.write_text(text.replace(needle, "x"), encoding="utf-8")
+    found = messages(repo)
+    assert any(m.startswith(AGENT_FILE) and needle in m for m in found), found
+
+
+def test_role_and_skill_lines_are_wrapped():
+    for rel in (ROLE, f"{SKILL}/SKILL.md"):
+        lines = (ROOT / rel).read_text(encoding="utf-8").splitlines()
+        long = [n for n, line in enumerate(lines, 1) if len(line) > 92]
+        assert not long, (rel, long)

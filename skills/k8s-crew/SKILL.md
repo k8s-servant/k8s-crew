@@ -118,12 +118,17 @@ in the report wherever an issue needed one.
 
 Follow `recipes/triage.md` from step 1 to step 6: sweep with `k8s-triage`, split the top
 issues between investigators (default 3, at most 4; 2 in Copilot CLI subagent mode),
-let them investigate (tasks scoped to each issue's evidence, no speculative
-weaknesses), correlate and re-check (the root cause is what broke things now; standing
-settings that only made it worse are separate issues; `confirmed` only with a command
-result shown; a timestamp alone is not a recent change), report in the fixed shape
-with fixes for the cause and not its knock-on effects, and hand over
-the fixes. Each investigator follows `roles/investigator.md`.
+let them investigate, correlate and re-check, report in the fixed shape, and hand over
+the fixes. Each investigator follows `roles/investigator.md`. The rules that matter
+most:
+
+- Investigator tasks are scoped to each issue's evidence: no speculative weaknesses.
+- The root cause is what broke things now; standing settings that only made it worse
+  are separate issues.
+- `confirmed` only with a command result shown.
+- A managedFields or creation time does not prove a change:
+  a timestamp alone is not a recent change.
+- The report gives fixes for the cause and not its knock-on effects.
 
 If the user gave no problem description, start the sweep anyway: triage is built for
 "something is wrong, I do not know where".

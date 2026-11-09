@@ -54,10 +54,29 @@ CREW_PROGRAMS = {
     "scripts/viewer-kubeconfig.sh",
     "config/copilot-deny-tools.sh",
 }
+# The investigator's evidence rules: in the role, and in the agent generated from it.
+ROLE_RULES = tuple(
+    (rule, f"must state the rule {rule}")
+    for rule in (
+        "**No speculative weaknesses.**",
+        "**Confirmed needs shown evidence.**",
+        "**Timestamps are not history.**",
+        "**Fix the cause, not its effects.**",
+    )
+)
 REQUIRED_TEXT = {
     SKILL_DIR / "SKILL.md": (
         ("one plain command per call", "must state one plain command per call for the boss"),
         ("denied", "must say what the boss does when a command is denied"),
+        *(
+            (rule, f"must summarise the rule: {rule}")
+            for rule in (
+                "no speculative weaknesses",
+                "`confirmed` only with a command result shown",
+                "a timestamp alone is not a recent change",
+                "fixes for the cause and not its knock-on effects",
+            )
+        ),
     ),
     RECIPE: (
         (
@@ -76,18 +95,9 @@ REQUIRED_TEXT = {
             "must state the rule **Fix the cause, not its effects.**",
         ),
     ),
-    ROLE: (
-        ("**No speculative weaknesses.**", "must state the rule **No speculative weaknesses.**"),
-        (
-            "**Confirmed needs shown evidence.**",
-            "must state the rule **Confirmed needs shown evidence.**",
-        ),
-        ("**Timestamps are not history.**", "must state the rule **Timestamps are not history.**"),
-        (
-            "**Fix the cause, not its effects.**",
-            "must state the rule **Fix the cause, not its effects.**",
-        ),
-    ),
+    ROLE: ROLE_RULES,
+    # The generated agent is what Claude Code and Copilot load: check it too.
+    AGENT: ROLE_RULES,
     HERDR_RUNNER: (
         ("agent_prompt_stalled", "must say what to do on agent_prompt_stalled (never resend)"),
         (

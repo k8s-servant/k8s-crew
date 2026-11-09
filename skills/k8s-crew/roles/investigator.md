@@ -112,6 +112,7 @@ one of:
 
 Use Proposed fix wherever the specialist skill does, and for anything destructive or
 hard to undo. **Fix the cause, not its effects.** Propose fixes for the cause you found,
-never for a knock-on effect that recovers once the cause is fixed. Do not copy the skill's own Ask first line: no agent in a crew run runs
-a fix. Write "None" when no fix is needed.
+never for a knock-on effect that recovers once the cause is fixed. Do not copy the
+skill's own Ask first line: no agent in a crew run runs a fix. Write "None" when no fix
+is needed.
 ````
