@@ -51,6 +51,8 @@ terminal. Do not print environment variables to check it.
      `cd` and no `echo`;
    - a pipe only into `grep`, `egrep`, `head`, `tail`, `sort`, `uniq`, `wc`, `cut`,
      `column` or `jq` (not `sed`, `awk`, `yq` or `xargs`);
+   - prefer `-o name`, `-o wide` or `-o json | jq '<program>'` with the program in
+     single quotes and no file arguments (no `import`, `include`, `env` or `$ENV`);
    - only these kubectl commands: `get`, `describe`, `logs`, `events`, `top`,
      `explain`, `api-resources`, `api-versions`, `version`, `cluster-info`,
      `auth can-i`, `auth whoami`, `rollout status` and `rollout history`. To see who

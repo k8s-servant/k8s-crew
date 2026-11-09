@@ -59,6 +59,13 @@ REQUIRED_TEXT = {
         ("one plain command per call", "must state one plain command per call for the boss"),
         ("denied", "must say what the boss does when a command is denied"),
     ),
+    RECIPE: (
+        (
+            "**Trigger, not precondition.**",
+            "must state the rule **Trigger, not precondition.** for the root cause",
+        ),
+        ("One issue, one section.", "must state the rule One issue, one section."),
+    ),
     HERDR_RUNNER: (
         ("agent_prompt_stalled", "must say what to do on agent_prompt_stalled (never resend)"),
         (

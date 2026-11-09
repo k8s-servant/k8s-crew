@@ -20,6 +20,8 @@ Rules for the whole run:
     and no `echo`. Run scripts by their full path;
   - a pipe only into `grep`, `egrep`, `head`, `tail`, `sort`, `uniq`, `wc`, `cut`,
     `column` or `jq` (not `sed`, `awk`, `yq` or `xargs`);
+  - prefer `-o name`, `-o wide` or `-o json | jq '<program>'` with the program in
+    single quotes and no file arguments (no `import`, `include`, `env` or `$ENV`);
   - only these kubectl commands: `get`, `describe`, `logs`, `events`, `top`,
     `explain`, `api-resources`, `api-versions`, `version`, `cluster-info`,
     `auth can-i`, `auth whoami`, `rollout status` and `rollout history`. Use
@@ -90,6 +92,14 @@ Link the findings into one picture:
   explains it (CoreDNS crashing because its pods were on the broken node; an app timing
   out because DNS is down). Knock-on effects are listed under the root cause, not as
   separate issues.
+- **Trigger, not precondition.** The root cause is the event that made things break
+  now: the node that stopped, the bad rollout, the deleted object. A setting that has
+  been there all along and only made the impact worse (all replicas pinned to one node,
+  one replica, no PodDisruptionBudget) is a precondition, not a cause, even when it
+  shows as a recent change in `managedFields`. Report it under Separate issues as
+  a weakness to follow up, never as the root cause or part of it.
+- **One issue, one section.** Each issue appears once: as the root cause, a knock-on
+  effect or a separate issue. Do not list the root cause again elsewhere.
 - **Separate issues** are causes that do not explain each other. Two independent
   problems are two root causes, not one.
 - **Re-check before naming a root cause.** Run one read-only command yourself that shows

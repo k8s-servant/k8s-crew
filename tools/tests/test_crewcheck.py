@@ -474,3 +474,24 @@ def test_copilot_run_starts_copilot_with_the_rules(tmp_path, prefix):
     env = guard_env(tmp_path, {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"})
     out = copilot_args(*prefix, "--run", "--agent", "my-agent", env=env)
     assert out == copilot_args(*prefix, "--lines", env=env) + "--agent\nmy-agent\n"
+
+
+TRIGGER_NEEDLES = ["**Trigger, not precondition.**", "One issue, one section."]
+
+
+@network
+@pytest.mark.parametrize("needle", TRIGGER_NEEDLES)
+def test_recipe_separates_trigger_from_preconditions(tmp_path, needle):
+    repo = make_repo(tmp_path)
+    path = repo / RECIPE
+    text = path.read_text(encoding="utf-8")
+    assert needle in text
+    path.write_text(text.replace(needle, "x"), encoding="utf-8")
+    assert any(m.startswith(RECIPE) and needle in m for m in messages(repo))
+
+
+@pytest.mark.parametrize("rel", [RECIPE, ROLE])
+def test_agents_are_told_the_command_shapes_the_check_reads(rel):
+    text = (ROOT / rel).read_text(encoding="utf-8")
+    assert "`-o name`" in text and "`-o wide`" in text
+    assert "no file arguments" in text
